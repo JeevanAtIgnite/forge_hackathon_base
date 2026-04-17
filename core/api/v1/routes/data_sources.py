@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.api.v1.schemas.data_source import DataSourceListResponse, DataSourceResponse
 from core.database.session import get_db_session
 from core.dependencies.auth import get_current_user
+from core.exceptions.base import NotFoundError
 from core.logging import get_logger
 from core.models.user import User
 from core.services.data_source import DataSourceService
@@ -147,11 +148,9 @@ async def process_in_background(
     data_source_id: str,
     user_id: str,
     session: AsyncSession,
-    index_to_knowledge_base: bool = True,
 ) -> None:
-    """Background task to process Excel file through agent pipeline and optionally index to knowledge base."""
+    """Background task to process a workbook into structured reasoning metadata."""
     try:
-        # Process through Excel agent pipeline
         excel_service = ExcelAgentService(session)
         await excel_service.process_data_source(
             data_source_id=data_source_id,
@@ -159,32 +158,9 @@ async def process_in_background(
         )
         await session.commit()
         logger.info(
-            "Excel agent processing completed",
+            "Structured workbook processing completed",
             data_source_id=data_source_id,
         )
-
-        # Index to knowledge base for vector search
-        if index_to_knowledge_base:
-            try:
-                data_source_service = DataSourceService(session)
-                indexing_result = await data_source_service.index_to_knowledge_base(
-                    data_source_id=data_source_id,
-                    user_id=user_id,
-                )
-                await session.commit()
-                logger.info(
-                    "Knowledge base indexing completed",
-                    data_source_id=data_source_id,
-                    chunks_indexed=indexing_result.chunk_count,
-                    has_analysis=bool(indexing_result.analysis),
-                )
-            except Exception as kb_error:
-                logger.error(
-                    "Knowledge base indexing failed (non-fatal)",
-                    data_source_id=data_source_id,
-                    error=str(kb_error),
-                    exc_info=True,
-                )
 
     except Exception as e:
         logger.error(
@@ -268,23 +244,66 @@ async def get_data_source_analysis(
     data_source_id: str,
     current_user: User = Depends(get_current_user),
     data_source_service: DataSourceService = Depends(get_data_source_service),
+    excel_service: ExcelAgentService = Depends(get_excel_agent_service),
 ) -> WorkbookAnalysisResponse | None:
     """Get the workbook analysis for a data source.
 
-    Returns the parsed analysis including sheet info, formulas, errors,
-    and data patterns. Returns null if the data source hasn't been
-    indexed yet.
-
-    This endpoint is useful for polling after background processing
-    to check if analysis is available.
+    Returns the structured table-first workbook summary. This endpoint is
+    useful for polling after background processing to check if schema
+    extraction is available.
     """
     data_source = await data_source_service.get_data_source(str(current_user.id), data_source_id)
 
-    # Check if knowledge base indexing has been done
-    knowledge_base_info = data_source.meta_info.get("knowledge_base", {})
-    analysis = knowledge_base_info.get("analysis")
+    try:
+        schema = await excel_service.get_schema(data_source_id, str(current_user.id))
+    except NotFoundError:
+        return None
 
-    return _convert_analysis_to_response(analysis)
+    manifest = schema.manifest or {}
+    tables = manifest.get("tables", [])
+    total_rows = sum(int(table.get("row_count", 0)) for table in tables)
+    total_columns = sum(int(table.get("column_count", 0)) for table in tables)
+
+    sheets = [
+        SheetInfo(
+            name=table.get("name", "Unknown"),
+            row_count=int(table.get("row_count", 0)),
+            column_count=int(table.get("column_count", 0)),
+            formula_count=int(table.get("formula_count", 0)),
+            error_count=0,
+            inferred_purpose=next(
+                (
+                    item.get("description")
+                    for item in (schema.enrichment or {}).get("table_overview", [])
+                    if item.get("table_name") == table.get("name")
+                ),
+                None,
+            ),
+            data_patterns=[],
+        )
+        for table in tables
+    ]
+
+    return WorkbookAnalysisResponse(
+        file_name=data_source.original_file_name,
+        sheet_count=manifest.get("sheet_count", data_source.sheet_count),
+        total_formulas=manifest.get("formula_column_count", 0),
+        total_errors=0,
+        overall_purpose=schema.workbook_purpose,
+        sheets=sheets,
+        summary=WorkbookAnalysisSummary(
+            total_rows=total_rows,
+            total_columns=total_columns,
+            has_formulas=manifest.get("formula_column_count", 0) > 0,
+            has_errors=False,
+            formula_categories=[
+                item.get("formula_type", "derived")
+                for item in (schema.enrichment or {}).get("formula_catalog", {}).get("derived_columns", [])
+            ],
+            error_types=[],
+            column_purposes={},
+        ),
+    )
 
 
 @router.post("/{data_source_id}/index", response_model=IndexingResponse)

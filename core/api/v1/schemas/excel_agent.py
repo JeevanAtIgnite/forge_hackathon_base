@@ -1,4 +1,6 @@
-"""Pydantic schemas for Excel agent API endpoints."""
+"""Schemas for the stable Excel-first agentic data intelligence API."""
+
+from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
@@ -7,16 +9,13 @@ from pydantic import BaseModel, Field
 
 
 class ProcessDataSourceRequest(BaseModel):
-    """Request to process a data source."""
+    """Request to process or reprocess a workbook."""
 
-    force_reprocess: bool = Field(
-        default=False,
-        description="Force reprocessing even if already processed",
-    )
+    force_reprocess: bool = False
 
 
 class ProcessDataSourceResponse(BaseModel):
-    """Response from processing a data source."""
+    """High-level workbook processing status."""
 
     schema_id: str
     data_source_id: str
@@ -26,19 +25,17 @@ class ProcessDataSourceResponse(BaseModel):
     workbook_purpose: str | None = None
     domain: str | None = None
     context_header_for_qa: str | None = None
-    total_sections: int = 0
-    total_merged_regions: int = 0
-    detected_colors: list[str] = []
-    queryable_questions: list[str] = []
-    data_quality_notes: list[str] = []
+    table_count: int = 0
+    relationship_count: int = 0
+    formula_column_count: int = 0
+    queryable_questions: list[str] = Field(default_factory=list)
+    data_quality_notes: list[str] = Field(default_factory=list)
     processing_error: str | None = None
     processed_at: datetime | None = None
 
-    model_config = {"from_attributes": True}
-
 
 class ExcelSchemaResponse(BaseModel):
-    """Full Excel schema response."""
+    """Full schema payload used by the UI workbook inspector."""
 
     id: str
     data_source_id: str
@@ -48,62 +45,125 @@ class ExcelSchemaResponse(BaseModel):
     workbook_purpose: str | None = None
     domain: str | None = None
     context_header_for_qa: str | None = None
-    manifest: dict = {}
-    semantic_schema: dict = {}
-    enrichment: dict = {}
-    query_routing: dict = {}
-    detected_colors: list[str] = []
-    total_sections: int = 0
-    total_merged_regions: int = 0
-    queryable_questions: list[str] = []
-    data_quality_notes: list[str] = []
+    manifest: dict[str, Any] = Field(default_factory=dict)
+    semantic_schema: dict[str, Any] = Field(default_factory=dict)
+    enrichment: dict[str, Any] = Field(default_factory=dict)
+    query_routing: dict[str, Any] = Field(default_factory=dict)
+    queryable_questions: list[str] = Field(default_factory=list)
+    data_quality_notes: list[str] = Field(default_factory=list)
     processing_error: str | None = None
     created_at: datetime
     updated_at: datetime
     processed_at: datetime | None = None
 
-    model_config = {"from_attributes": True}
+
+class SchemaInfoResponse(BaseModel):
+    """Compact workbook status summary."""
+
+    data_source_id: str
+    processing_status: str
+    is_ready_for_queries: bool
+    workbook_title: str | None = None
+    workbook_purpose: str | None = None
+    domain: str | None = None
+    context_header_for_qa: str | None = None
+    table_count: int = 0
+    relationship_count: int = 0
+    formula_column_count: int = 0
+    queryable_questions_count: int = 0
+    has_data_quality_notes: bool = False
+    has_enrichment: bool = False
+
+
+class ManifestSummaryResponse(BaseModel):
+    """Workbook manifest summary."""
+
+    sheet_count: int = 0
+    sheet_names: list[str] = Field(default_factory=list)
+    table_count: int = 0
+    relationship_count: int = 0
+    formula_column_count: int = 0
+    tables: list[dict[str, Any]] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class EnrichmentResponse(BaseModel):
+    """Optional workbook enrichment returned for inspection only."""
+
+    semantic_model: dict[str, Any] = Field(default_factory=dict)
+    data_quality: dict[str, Any] = Field(default_factory=dict)
+    kpi_recommendations: list[dict[str, Any]] = Field(default_factory=list)
+    table_overview: list[dict[str, Any]] = Field(default_factory=list)
+    demo_scenarios: list[str] = Field(default_factory=list)
+    relationship_graph: dict[str, Any] = Field(default_factory=dict)
+    formula_catalog: dict[str, Any] = Field(default_factory=dict)
+    metadata_index: dict[str, Any] = Field(default_factory=dict)
 
 
 class AskQuestionRequest(BaseModel):
-    """Request to ask a question about Excel data."""
+    """Natural-language workbook question."""
 
-    question: str = Field(
-        ...,
-        min_length=3,
-        max_length=1000,
-        description="Natural language question about the data",
-    )
-    conversation_id: str | None = Field(
-        default=None,
-        description="Optional conversation ID to continue existing conversation",
-    )
+    question: str
+    conversation_id: str | None = None
+
+
+class AgentLogResponse(BaseModel):
+    """One visible agent action in the orchestrator pipeline."""
+
+    agent: str
+    message: str
+
+
+class QueryLogicResponse(BaseModel):
+    """Transparent execution representation."""
+
+    pandas: str = ""
+    sql_like: str = ""
+
+
+class InsightCardResponse(BaseModel):
+    """Short explainable insight surfaced by the UI."""
+
+    title: str
+    message: str
+
+
+class SimulationResponse(BaseModel):
+    """Scenario before/after comparison."""
+
+    before_rows: list[dict[str, Any]] = Field(default_factory=list)
+    after_rows: list[dict[str, Any]] = Field(default_factory=list)
+    summary: str
 
 
 class AskQuestionResponse(BaseModel):
-    """Response from asking a question."""
+    """Stable orchestrator response for the demo UI."""
 
     success: bool
-    answer: Any = None
-    code_used: str | None = None
-    iterations: int | None = None
-    error: str | None = None
-    execution_time_ms: int
+    answer: str
+    answer_text: str | None = None
+    answer_title: str | None = None
+    agent_logs: list[AgentLogResponse] = Field(default_factory=list)
+    query_logic: QueryLogicResponse = Field(default_factory=QueryLogicResponse)
+    supporting_data: list[dict[str, Any]] = Field(default_factory=list)
+    insight_card: InsightCardResponse | None = None
+    simulation: SimulationResponse | None = None
+    warnings: list[str] = Field(default_factory=list)
+    selected_tables: list[str] = Field(default_factory=list)
+    execution_time_ms: int = 0
     query_id: str
     conversation_id: str | None = None
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-    cost_usd: float | None = None
-    # --- Rosetta coordinator extensions (optional; UI may ignore) ---
-    trace: dict | None = None  # backward-trace tree
-    audit_status: str | None = None  # "passed" | "partial" | "unknown"
-    evidence_refs: list[str] | None = None  # cited cell refs
-    active_entity: str | None = None  # last referenced cell ref / metric
-    scenario_overrides: dict | None = None  # active what-if overrides
+
+
+class SuggestedQuestionsResponse(BaseModel):
+    """Suggested workbook questions."""
+
+    questions: list[str] = Field(default_factory=list)
+    data_source_id: str
 
 
 class QueryHistoryItem(BaseModel):
-    """Single query history item."""
+    """Stored query history item."""
 
     id: str
     question: str
@@ -112,172 +172,74 @@ class QueryHistoryItem(BaseModel):
     success: bool
     error_message: str | None = None
     execution_time_ms: int | None = None
-    iterations_used: int = 1
+    iterations_used: int = 0
     created_at: datetime
-
-    model_config = {"from_attributes": True}
 
 
 class QueryHistoryResponse(BaseModel):
-    """Response containing query history."""
+    """Query history list."""
 
-    items: list[QueryHistoryItem]
+    items: list[QueryHistoryItem] = Field(default_factory=list)
     total: int
 
 
-class SuggestedQuestionsResponse(BaseModel):
-    """Response containing suggested questions."""
-
-    questions: list[str]
-    data_source_id: str
-
-
-class ManifestSummaryResponse(BaseModel):
-    """Summary of the extracted manifest."""
-
-    sheet_count: int
-    sheet_names: list[str]
-    total_merged_regions: int
-    total_sections: int
-    detected_colors: list[str]
-    sheets: dict[str, dict]
-
-
-class SheetEnrichmentResponse(BaseModel):
-    """Enrichment data for a single sheet."""
-
-    sheet_name: str
-    semantic_title: str = ""
-    domain: str = "general"
-    primary_purpose: str = ""
-    time_dimension: dict = {}
-    key_metrics: list[dict] = []
-    dimensions: list[dict] = []
-    detected_tables: list[dict] = []
-    section_labels: list[dict] = []
-    answerable_question_types: list[str] = []
-    data_quality_flags: list[dict] = []
-    retrieval_hints: dict = {}
-    confidence: str = "medium"
-
-
-class EnrichmentResponse(BaseModel):
-    """Full enrichment response for a workbook."""
-
-    workbook_title: str = ""
-    workbook_purpose: str = ""
-    domain: str = "general"
-    context_header_for_qa: str = ""
-    sheet_index: list[dict] = []
-    cross_sheet_relationships: list[dict] = []
-    global_metrics: list[str] = []
-    query_routing: dict = {}
-    sheets: dict[str, SheetEnrichmentResponse] = {}
-
-    model_config = {"from_attributes": True}
-
-
-class SchemaInfoResponse(BaseModel):
-    """Quick info about the schema."""
-
-    data_source_id: str
-    processing_status: str
-    is_ready_for_queries: bool
-    workbook_title: str | None = None
-    workbook_purpose: str | None = None
-    domain: str | None = None
-    context_header_for_qa: str | None = None
-    sheet_count: int = 0
-    queryable_questions_count: int = 0
-    has_data_quality_notes: bool = False
-    has_enrichment: bool = False
-
-
-# ==================== Conversation Schemas ====================
-
-
 class ConversationMessageResponse(BaseModel):
-    """Single message in a conversation."""
+    """Conversation message entry."""
 
     id: str
     role: str
     content: str
     code_used: str | None = None
     execution_time_ms: int | None = None
-    is_error: bool = False
+    is_error: bool
     error_message: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
-    cost_usd: float = 0
+    cost_usd: float = 0.0
     created_at: datetime
-
-    model_config = {"from_attributes": True}
 
 
 class ConversationResponse(BaseModel):
-    """Response for a single conversation."""
+    """Full conversation payload."""
 
     id: str
     data_source_id: str
     title: str
-    is_active: bool = True
-    total_input_tokens: int = 0
-    total_output_tokens: int = 0
-    total_cost_usd: float = 0
+    is_active: bool
+    total_input_tokens: int
+    total_output_tokens: int
+    total_cost_usd: float
     created_at: datetime
     updated_at: datetime
     last_message_at: datetime | None = None
-    messages: list[ConversationMessageResponse] = []
-
-    model_config = {"from_attributes": True}
+    messages: list[ConversationMessageResponse] = Field(default_factory=list)
 
 
 class ConversationListItem(BaseModel):
-    """Summary item for conversation list."""
+    """Conversation row for list views."""
 
     id: str
     data_source_id: str
     title: str
-    total_cost_usd: float = 0
-    message_count: int = 0
+    total_cost_usd: float
+    message_count: int
     created_at: datetime
     last_message_at: datetime | None = None
 
-    model_config = {"from_attributes": True}
-
 
 class ConversationListResponse(BaseModel):
-    """Response containing list of conversations."""
+    """Conversation listing payload."""
 
-    items: list[ConversationListItem]
+    items: list[ConversationListItem] = Field(default_factory=list)
     total: int
 
 
 class UsageSummaryResponse(BaseModel):
-    """Response containing usage statistics."""
+    """Usage summary payload."""
 
     period_days: int
     total_input_tokens: int
     total_output_tokens: int
     total_cost_usd: float
     total_calls: int
-    by_call_type: dict[str, dict]
-
-
-class LLMUsageResponse(BaseModel):
-    """Response for a single LLM usage record."""
-
-    id: str
-    call_type: str
-    context: dict = {}  # Flexible context with relevant IDs
-    provider: str
-    model: str
-    input_tokens: int
-    output_tokens: int
-    total_tokens: int
-    total_cost_usd: float
-    latency_ms: int | None = None
-    success: bool
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
+    by_call_type: dict[str, dict[str, float | int]] = Field(default_factory=dict)

@@ -19,53 +19,38 @@ export default function Layout({ children, activeNavItem = 'chat', onNavItemClic
   };
 
   return (
-    <div className="flex h-screen bg-[#0f0f1a]">
-      {/* Sidebar */}
+    <div className="flex h-screen bg-[#07080f]">
       <Sidebar activeItem={activeNavItem} onItemClick={onNavItemClick} />
 
-      {/* Main Content Area */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Top Header */}
-        <header className="h-16 bg-[#1a1a2e]/80 backdrop-blur-sm border-b border-white/10 flex items-center justify-between px-6">
-          <div className="flex items-center gap-4">
-            <h1 className="text-lg font-bold text-white">Dashboard</h1>
-            <span className="px-2.5 py-1 bg-[#8243EA]/20 text-[#A78BFA] text-xs font-semibold rounded-full">Pro</span>
-          </div>
-
-          {/* User Profile */}
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-3">
+        <header className="h-12 border-b border-white/8 flex items-center justify-end px-6 bg-[#08090f]">
+          <div className="flex items-center gap-3">
+            <div className="hidden sm:flex items-center gap-2">
               {user?.profile_picture ? (
                 <img
                   src={user.profile_picture}
                   alt={user.full_name || user.email}
-                  className="w-10 h-10 rounded-full ring-2 ring-[#8243EA]/50"
+                  className="w-7 h-7 rounded-full"
                 />
               ) : (
-                <div className="w-10 h-10 bg-gradient-to-br from-[#8243EA] to-[#6366F1] rounded-full flex items-center justify-center ring-2 ring-[#8243EA]/30">
-                  <span className="text-white font-bold text-sm">
+                <div className="w-7 h-7 bg-[linear-gradient(135deg,#8243EA,#2563EB)] rounded-full flex items-center justify-center">
+                  <span className="text-white font-bold text-[11px]">
                     {user?.email?.charAt(0).toUpperCase()}
                   </span>
                 </div>
               )}
-              <div className="hidden sm:block">
-                <p className="text-sm font-semibold text-white">
-                  {user?.full_name || user?.email}
-                </p>
-                <p className="text-xs text-gray-400">{user?.email}</p>
-              </div>
+              <p className="text-xs text-gray-400">{user?.full_name || user?.email}</p>
             </div>
             <button
               onClick={handleLogout}
-              className="px-4 py-2 text-sm font-medium text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition-all"
+              className="text-[10px] uppercase tracking-[0.18em] font-semibold text-gray-500 hover:text-white px-2 py-1 rounded transition"
             >
               Sign out
             </button>
           </div>
         </header>
 
-        {/* Page Content */}
-        <main className="flex-1 overflow-auto bg-gradient-to-br from-[#0f0f1a] via-[#1a1a2e] to-[#0f0f1a]">
+        <main className="flex-1 overflow-auto bg-[#07080f]">
           {children}
         </main>
       </div>

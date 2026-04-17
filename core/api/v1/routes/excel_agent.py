@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.api.v1.schemas.excel_agent import (
+    AgentLogResponse,
     AskQuestionRequest,
     AskQuestionResponse,
     ConversationListItem,
@@ -14,10 +15,10 @@ from core.api.v1.schemas.excel_agent import (
     ManifestSummaryResponse,
     ProcessDataSourceRequest,
     ProcessDataSourceResponse,
+    QueryLogicResponse,
     QueryHistoryItem,
     QueryHistoryResponse,
     SchemaInfoResponse,
-    SheetEnrichmentResponse,
     SuggestedQuestionsResponse,
     UsageSummaryResponse,
 )
@@ -78,9 +79,9 @@ async def process_data_source(
             workbook_purpose=schema.workbook_purpose,
             domain=schema.domain,
             context_header_for_qa=schema.context_header_for_qa,
-            total_sections=schema.total_sections,
-            total_merged_regions=schema.total_merged_regions,
-            detected_colors=schema.detected_colors,
+            table_count=(schema.manifest or {}).get("table_count", 0),
+            relationship_count=(schema.manifest or {}).get("relationship_count", 0),
+            formula_column_count=(schema.manifest or {}).get("formula_column_count", 0),
             queryable_questions=schema.queryable_questions,
             data_quality_notes=schema.data_quality_notes,
             processing_error=schema.processing_error,
@@ -135,9 +136,6 @@ async def get_schema(
             semantic_schema=schema.semantic_schema,
             enrichment=schema.enrichment,
             query_routing=schema.query_routing,
-            detected_colors=schema.detected_colors,
-            total_sections=schema.total_sections,
-            total_merged_regions=schema.total_merged_regions,
             queryable_questions=schema.queryable_questions,
             data_quality_notes=schema.data_quality_notes,
             processing_error=schema.processing_error,
@@ -171,10 +169,6 @@ async def get_schema_info(
             user_id=str(current_user.id),
         )
 
-        sheet_count = 0
-        if schema.manifest and "sheet_count" in schema.manifest:
-            sheet_count = schema.manifest["sheet_count"]
-
         return SchemaInfoResponse(
             data_source_id=schema.data_source_id,
             processing_status=schema.processing_status,
@@ -183,7 +177,9 @@ async def get_schema_info(
             workbook_purpose=schema.workbook_purpose,
             domain=schema.domain,
             context_header_for_qa=schema.context_header_for_qa,
-            sheet_count=sheet_count,
+            table_count=(schema.manifest or {}).get("table_count", 0),
+            relationship_count=(schema.manifest or {}).get("relationship_count", 0),
+            formula_column_count=(schema.manifest or {}).get("formula_column_count", 0),
             queryable_questions_count=len(schema.queryable_questions or []),
             has_data_quality_notes=bool(schema.data_quality_notes),
             has_enrichment=bool(schema.enrichment),
@@ -219,10 +215,11 @@ async def get_manifest_summary(
         return ManifestSummaryResponse(
             sheet_count=manifest.get("sheet_count", 0),
             sheet_names=manifest.get("sheet_names", []),
-            total_merged_regions=manifest.get("total_merged_regions", 0),
-            total_sections=manifest.get("total_sections", 0),
-            detected_colors=manifest.get("detected_colors", []),
-            sheets=manifest.get("sheets", {}),
+            table_count=manifest.get("table_count", 0),
+            relationship_count=manifest.get("relationship_count", 0),
+            formula_column_count=manifest.get("formula_column_count", 0),
+            tables=manifest.get("tables", []),
+            notes=manifest.get("notes", []),
         )
 
     except NotFoundError as e:
@@ -252,35 +249,15 @@ async def get_enrichment(
 
         enrichment = schema.enrichment or {}
 
-        # Build sheet enrichments
-        sheets = {}
-        for sheet_name, sheet_data in enrichment.get("sheets", {}).items():
-            sheets[sheet_name] = SheetEnrichmentResponse(
-                sheet_name=sheet_data.get("sheet_name", sheet_name),
-                semantic_title=sheet_data.get("semantic_title", ""),
-                domain=sheet_data.get("domain", "general"),
-                primary_purpose=sheet_data.get("primary_purpose", ""),
-                time_dimension=sheet_data.get("time_dimension", {}),
-                key_metrics=sheet_data.get("key_metrics", []),
-                dimensions=sheet_data.get("dimensions", []),
-                detected_tables=sheet_data.get("detected_tables", []),
-                section_labels=sheet_data.get("section_labels", []),
-                answerable_question_types=sheet_data.get("answerable_question_types", []),
-                data_quality_flags=sheet_data.get("data_quality_flags", []),
-                retrieval_hints=sheet_data.get("retrieval_hints", {}),
-                confidence=sheet_data.get("confidence", "medium"),
-            )
-
         return EnrichmentResponse(
-            workbook_title=enrichment.get("workbook_title", ""),
-            workbook_purpose=enrichment.get("workbook_purpose", ""),
-            domain=enrichment.get("domain", "general"),
-            context_header_for_qa=enrichment.get("context_header_for_qa", ""),
-            sheet_index=enrichment.get("sheet_index", []),
-            cross_sheet_relationships=enrichment.get("cross_sheet_relationships", []),
-            global_metrics=enrichment.get("global_metrics", []),
-            query_routing=enrichment.get("recommended_query_routing", {}),
-            sheets=sheets,
+            formula_catalog=enrichment.get("formula_catalog", {}),
+            relationship_graph=enrichment.get("relationship_graph", {}),
+            metadata_index=enrichment.get("metadata_index", {}),
+            semantic_model=enrichment.get("semantic_model", {}),
+            data_quality=enrichment.get("data_quality", {}),
+            kpi_recommendations=enrichment.get("kpi_recommendations", []),
+            table_overview=enrichment.get("table_overview", []),
+            demo_scenarios=enrichment.get("demo_scenarios", []),
         )
 
     except NotFoundError as e:
@@ -313,22 +290,22 @@ async def ask_question(
 
         return AskQuestionResponse(
             success=result["success"],
-            answer=result.get("answer"),
-            code_used=result.get("code_used"),
-            iterations=result.get("iterations"),
-            error=result.get("error"),
+            answer=result.get("answer", ""),
+            answer_text=result.get("answer_text"),
+            answer_title=result.get("answer_title"),
+            agent_logs=[
+                AgentLogResponse(**log)
+                for log in result.get("agent_logs", [])
+            ],
+            query_logic=QueryLogicResponse(**result.get("query_logic", {})),
+            supporting_data=result.get("supporting_data", []),
+            insight_card=result.get("insight_card"),
+            simulation=result.get("simulation"),
+            warnings=result.get("warnings", []),
+            selected_tables=result.get("selected_tables", []),
             execution_time_ms=result["execution_time_ms"],
             query_id=result["query_id"],
             conversation_id=result.get("conversation_id"),
-            input_tokens=result.get("input_tokens"),
-            output_tokens=result.get("output_tokens"),
-            cost_usd=result.get("cost_usd"),
-            # Rosetta extensions
-            trace=result.get("trace"),
-            audit_status=result.get("audit_status"),
-            evidence_refs=result.get("evidence_refs"),
-            active_entity=result.get("active_entity"),
-            scenario_overrides=result.get("scenario_overrides"),
         )
 
     except NotFoundError as e:

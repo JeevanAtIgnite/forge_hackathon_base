@@ -37,7 +37,14 @@ class DataSourceService:
     def __init__(self, session: AsyncSession, knowledge_base: Optional[KnowledgeBaseService] = None):
         """Initialize service with database session and optional knowledge base."""
         self.session = session
-        self._knowledge_base = knowledge_base or KnowledgeBaseService()
+        self._knowledge_base = knowledge_base
+
+    @property
+    def knowledge_base(self) -> KnowledgeBaseService:
+        """Lazily create the legacy knowledge base service when needed."""
+        if self._knowledge_base is None:
+            self._knowledge_base = KnowledgeBaseService()
+        return self._knowledge_base
 
     async def create_data_source(self, user_id: str, name: str, file: UploadFile) -> DataSource:
         """Create a data source from an uploaded spreadsheet."""
@@ -162,7 +169,7 @@ class DataSourceService:
         file_content = file_path.read_bytes()
 
         # Index into knowledge base and get analysis
-        indexing_result = await self._knowledge_base.index_data_source(
+        indexing_result = await self.knowledge_base.index_data_source(
             file_content=file_content,
             file_extension=data_source.file_extension,
             data_source_id=str(data_source.id),
@@ -214,7 +221,7 @@ class DataSourceService:
             List of search results with content and metadata
 
         """
-        results = await self._knowledge_base.search(
+        results = await self.knowledge_base.search(
             query=query,
             user_id=user_id,
             data_source_id=data_source_id,
@@ -246,7 +253,7 @@ class DataSourceService:
             Number of chunks deleted
 
         """
-        return await self._knowledge_base.delete_data_source(
+        return await self.knowledge_base.delete_data_source(
             data_source_id=data_source_id,
             user_id=user_id,
         )

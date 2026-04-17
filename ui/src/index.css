@@ -1,1 +1,207 @@
 @import "tailwindcss";
+
+@keyframes dashboardOrbFloat {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.32;
+  }
+  50% {
+    transform: translate3d(0, -14px, 0) scale(1.05);
+    opacity: 0.55;
+  }
+}
+
+@keyframes dashboardGlowPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 rgba(130, 67, 234, 0.18);
+  }
+  50% {
+    box-shadow: 0 0 42px rgba(130, 67, 234, 0.28);
+  }
+}
+
+@keyframes dashboardSlideUp {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 18px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes dashboardShimmer {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 200% 50%;
+  }
+}
+
+@keyframes cockpitDot {
+  0%, 100% {
+    transform: scale(0.6);
+    opacity: 0.4;
+  }
+  50% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes cockpitFlow {
+  0% {
+    background-position: 0% 0%;
+  }
+  100% {
+    background-position: 100% 0%;
+  }
+}
+
+@keyframes cockpitRing {
+  0% {
+    box-shadow: 0 0 0 0 rgba(130, 67, 234, 0.55);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(130, 67, 234, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(130, 67, 234, 0);
+  }
+}
+
+@keyframes cockpitTraceIn {
+  from {
+    opacity: 0;
+    transform: translate3d(-6px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes cockpitActivePulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 8px 32px rgba(130, 67, 234, 0.32), 0 0 0 0 rgba(130, 67, 234, 0.5);
+  }
+  50% {
+    transform: scale(1.04);
+    box-shadow: 0 12px 44px rgba(130, 67, 234, 0.42), 0 0 0 8px rgba(130, 67, 234, 0);
+  }
+}
+
+@keyframes cockpitCheckIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  60% {
+    transform: scale(1.15);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes cockpitProgress {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes cockpitGlowBorder {
+  0%, 100% {
+    border-color: rgba(130, 67, 234, 0.55);
+  }
+  50% {
+    border-color: rgba(37, 99, 235, 0.55);
+  }
+}
+
+@layer utilities {
+  .agentic-orb {
+    animation: dashboardOrbFloat 8s ease-in-out infinite;
+    filter: blur(8px);
+  }
+
+  .agentic-pulse {
+    animation: dashboardGlowPulse 2.6s ease-in-out infinite;
+  }
+
+  .agentic-slide-up {
+    animation: dashboardSlideUp 420ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .agentic-shimmer {
+    background-image: linear-gradient(
+      110deg,
+      rgba(255, 255, 255, 0.02) 0%,
+      rgba(255, 255, 255, 0.12) 22%,
+      rgba(255, 255, 255, 0.02) 44%
+    );
+    background-size: 220% 100%;
+    animation: dashboardShimmer 3.2s linear infinite;
+  }
+
+  .cockpit-dot {
+    animation: cockpitDot 1.4s ease-in-out infinite;
+  }
+
+  .cockpit-ring {
+    animation: cockpitRing 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  .cockpit-flow {
+    background-image: linear-gradient(
+      90deg,
+      rgba(130, 67, 234, 0) 0%,
+      rgba(130, 67, 234, 0.7) 30%,
+      rgba(37, 99, 235, 0.7) 60%,
+      rgba(130, 67, 234, 0) 100%
+    );
+    background-size: 220% 100%;
+    animation: cockpitFlow 1.6s linear infinite;
+  }
+
+  .cockpit-trace {
+    animation: cockpitTraceIn 320ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .cockpit-grid {
+    background-image:
+      linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+
+  .cockpit-grid-light {
+    background-image:
+      linear-gradient(rgba(15, 16, 32, 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(15, 16, 32, 0.04) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+
+  .cockpit-active-pulse {
+    animation: cockpitActivePulse 1.6s ease-in-out infinite;
+  }
+
+  .cockpit-check-in {
+    animation: cockpitCheckIn 380ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .cockpit-progress {
+    animation: cockpitProgress 1.6s ease-in-out infinite;
+  }
+
+  .cockpit-glow-border {
+    animation: cockpitGlowBorder 2.4s ease-in-out infinite;
+  }
+}

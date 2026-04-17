@@ -10,16 +10,24 @@ from core.api.v1.schemas.auth import (
 )
 from core.api.v1.schemas.data_source import DataSourceListResponse, DataSourceResponse
 from core.api.v1.schemas.excel_agent import (
+    AgentLogResponse,
     AskQuestionRequest,
     AskQuestionResponse,
+    ConversationListItem,
+    ConversationListResponse,
+    ConversationMessageResponse,
+    ConversationResponse,
+    EnrichmentResponse,
     ExcelSchemaResponse,
     ManifestSummaryResponse,
     ProcessDataSourceRequest,
     ProcessDataSourceResponse,
+    QueryLogicResponse,
     QueryHistoryItem,
     QueryHistoryResponse,
     SchemaInfoResponse,
     SuggestedQuestionsResponse,
+    UsageSummaryResponse,
 )
 
 __all__ = [
@@ -33,12 +41,20 @@ __all__ = [
     "DataSourceListResponse",
     "AskQuestionRequest",
     "AskQuestionResponse",
+    "AgentLogResponse",
+    "ConversationListItem",
+    "ConversationListResponse",
+    "ConversationMessageResponse",
+    "ConversationResponse",
+    "EnrichmentResponse",
     "ExcelSchemaResponse",
     "ManifestSummaryResponse",
     "ProcessDataSourceRequest",
     "ProcessDataSourceResponse",
+    "QueryLogicResponse",
     "QueryHistoryItem",
     "QueryHistoryResponse",
     "SchemaInfoResponse",
     "SuggestedQuestionsResponse",
+    "UsageSummaryResponse",
 ]
