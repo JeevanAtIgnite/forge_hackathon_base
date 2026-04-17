@@ -136,6 +136,26 @@ class SimulationResponse(BaseModel):
     summary: str
 
 
+class NarrativeStep(BaseModel):
+    """A single plain-English step in the reasoning narrative."""
+
+    title: str
+    body: str
+
+
+class ReasoningResponse(BaseModel):
+    """Structured reasoning payload explaining how the answer was derived."""
+
+    intent: str | None = None
+    metric_column: str | None = None
+    dimension_column: str | None = None
+    aggregation_op: str | None = None
+    target_entity: str | None = None
+    selected_tables: list[str] = Field(default_factory=list)
+    row_count: int = 0
+    narrative: list[NarrativeStep] = Field(default_factory=list)
+
+
 class AskQuestionResponse(BaseModel):
     """Stable orchestrator response for the demo UI."""
 
@@ -148,6 +168,7 @@ class AskQuestionResponse(BaseModel):
     supporting_data: list[dict[str, Any]] = Field(default_factory=list)
     insight_card: InsightCardResponse | None = None
     simulation: SimulationResponse | None = None
+    reasoning: ReasoningResponse | None = None
     warnings: list[str] = Field(default_factory=list)
     selected_tables: list[str] = Field(default_factory=list)
     execution_time_ms: int = 0

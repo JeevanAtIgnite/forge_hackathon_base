@@ -77,6 +77,22 @@ export interface SimulationResult {
   summary: string;
 }
 
+export interface NarrativeStep {
+  title: string;
+  body: string;
+}
+
+export interface Reasoning {
+  intent: string | null;
+  metric_column: string | null;
+  dimension_column: string | null;
+  aggregation_op: string | null;
+  target_entity: string | null;
+  selected_tables: string[];
+  row_count: number;
+  narrative: NarrativeStep[];
+}
+
 export interface AskQuestionResponse {
   success: boolean;
   answer: string;
@@ -87,6 +103,7 @@ export interface AskQuestionResponse {
   supporting_data: Array<Record<string, unknown>>;
   insight_card: InsightCard | null;
   simulation: SimulationResult | null;
+  reasoning: Reasoning | null;
   warnings: string[];
   selected_tables: string[];
   execution_time_ms: number;

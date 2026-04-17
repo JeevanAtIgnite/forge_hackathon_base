@@ -214,6 +214,7 @@ class ExcelAgentService:
                 "supporting_data": result["result_table"],
                 "insight_card": result.get("insight_card"),
                 "simulation": result.get("simulation"),
+                "reasoning": result.get("reasoning"),
                 "warnings": warnings,
                 "selected_tables": result.get("selected_tables", []),
                 "execution_time_ms": execution_time_ms,

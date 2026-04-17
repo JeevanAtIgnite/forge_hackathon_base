@@ -19,7 +19,6 @@ import {
   getUsageSummary,
   listConversations,
   processDataSource,
-  type AgentLog,
   type AskQuestionResponse,
   type Conversation,
   type ConversationListItem,
@@ -42,6 +41,14 @@ const CAPABILITY_MODES: { id: CapabilityMode; label: string; tagline: string; av
   { id: 'monitoring', label: 'Monitoring', tagline: 'Catch issues before reports', available: false },
 ];
 
+
+const REASONING_STAGES: { agent: string; message: string }[] = [
+  { agent: 'Planner', message: 'Decomposing the query · identifying tables and required joins.' },
+  { agent: 'Data Agent', message: 'Executing pandas operations on the live workbook.' },
+  { agent: 'Insight', message: 'Quantifying drivers, deltas, and statistical significance.' },
+  { agent: 'Simulation', message: 'Recomputing the model under counterfactual parameters.' },
+  { agent: 'Validator', message: 'Cross-checking every output. Refusing what cannot be defended.' },
+];
 
 const MODE_FALLBACK_PROMPTS: Record<CapabilityMode, string[]> = {
   query: [
@@ -176,19 +183,21 @@ function ChatCanvas({
   emptyState,
   isAsking,
   theater,
+  onViewReasoning,
 }: {
   entries: ChatEntry[];
   scrollRef: React.RefObject<HTMLDivElement | null>;
   emptyState: React.ReactNode;
   isAsking: boolean;
   theater?: React.ReactNode;
+  onViewReasoning?: (result: AskQuestionResponse) => void;
 }) {
   return (
     <div ref={scrollRef} className="flex-1 overflow-auto px-6">
       <div className="mx-auto w-full max-w-4xl space-y-6 py-6">
         {entries.length === 0 && !isAsking ? emptyState : null}
         {entries.map((entry, index) => (
-          <MessageRow key={`${entry.type}-${index}`} entry={entry} />
+          <MessageRow key={`${entry.type}-${index}`} entry={entry} onViewReasoning={onViewReasoning} />
         ))}
         {isAsking && theater}
       </div>
@@ -196,7 +205,7 @@ function ChatCanvas({
   );
 }
 
-function MessageRow({ entry }: { entry: ChatEntry }) {
+function MessageRow({ entry, onViewReasoning }: { entry: ChatEntry; onViewReasoning?: (result: AskQuestionResponse) => void }) {
   if (entry.type === 'user') {
     return (
       <div className="agentic-slide-up flex justify-end">
@@ -206,146 +215,46 @@ function MessageRow({ entry }: { entry: ChatEntry }) {
       </div>
     );
   }
-  return <AssistantMessage entry={entry} />;
+  return <AssistantMessage entry={entry} onViewReasoning={onViewReasoning} />;
 }
 
-function AssistantMessage({ entry }: { entry: Extract<ChatEntry, { type: 'assistant' }> }) {
+function AssistantMessage({ entry, onViewReasoning }: { entry: Extract<ChatEntry, { type: 'assistant' }>; onViewReasoning?: (result: AskQuestionResponse) => void }) {
   const result = entry.result;
-  const success = result ? result.success : !entry.error;
 
   return (
     <div className="agentic-slide-up">
-      <div className="mb-2 flex items-center gap-2">
-        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[linear-gradient(135deg,#8243EA,#2563EB)] text-[9px] font-bold uppercase tracking-wide text-white">
-          DI
-        </span>
-        {result?.selected_tables?.slice(0, 1).map((table) => (
-          <span key={table} className="rounded border border-white/8 bg-white/[0.03] px-1.5 py-0.5 text-[10px] uppercase tracking-[0.16em] text-gray-400">
-            {table}
-          </span>
-        ))}
-        {result && (
-          <span className={`ml-auto inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] ${success ? 'bg-emerald-500/10 text-emerald-300' : 'bg-amber-500/10 text-amber-300'}`}>
-            <span className={`h-1.5 w-1.5 rounded-full ${success ? 'bg-emerald-300' : 'bg-amber-300'}`} />
-            {success ? 'Verified' : 'Needs review'} · <span className="font-mono">{result.execution_time_ms}ms</span>
-          </span>
-        )}
+      <div className="mb-3 flex h-6 w-6 items-center justify-center rounded-md bg-[linear-gradient(135deg,#8243EA,#2563EB)] text-[9px] font-bold uppercase tracking-wide text-white">
+        DI
       </div>
 
-      <p className="text-[18px] font-medium leading-8 text-white">{entry.content}</p>
+      <p className="text-[19px] font-medium leading-8 text-white">{entry.content}</p>
 
       {result?.insight_card && (
-        <div className="mt-3 rounded-xl border border-[#8243EA]/30 bg-[linear-gradient(135deg,rgba(130,67,234,0.14),rgba(37,99,235,0.06))] p-4">
+        <div className="mt-4 rounded-xl border border-[#8243EA]/30 bg-[linear-gradient(135deg,rgba(130,67,234,0.14),rgba(37,99,235,0.06))] p-4">
           <p className="text-[10px] uppercase tracking-[0.22em] text-[#d8c9ff]">Insight</p>
-          <p className="mt-1 text-sm font-semibold text-white">{result.insight_card.title}</p>
-          <p className="mt-1.5 text-sm leading-6 text-gray-200">{result.insight_card.message}</p>
+          <p className="mt-1 text-sm leading-6 text-gray-100">{result.insight_card.message}</p>
         </div>
       )}
 
       {result?.simulation && (
-        <div className="mt-3 rounded-xl border border-white/8 bg-white/[0.02] p-4">
-          <p className="text-[10px] uppercase tracking-[0.22em] text-gray-500">Simulation</p>
+        <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.02] p-4">
+          <p className="text-[10px] uppercase tracking-[0.22em] text-gray-500">Scenario</p>
           <p className="mt-1.5 text-sm leading-6 text-gray-200">{result.simulation.summary}</p>
-          <div className="mt-3 grid gap-3 md:grid-cols-2">
-            <div>
-              <p className="mb-1.5 text-[10px] uppercase tracking-[0.22em] text-gray-500">Before</p>
-              <CompactTable rows={result.simulation.before_rows} />
-            </div>
-            <div>
-              <p className="mb-1.5 text-[10px] uppercase tracking-[0.22em] text-gray-500">After</p>
-              <CompactTable rows={result.simulation.after_rows} />
-            </div>
-          </div>
         </div>
       )}
 
-      {result && <AgentFlowBadge result={result} />}
-
-      {result && <EvidenceDrawer result={result} />}
+      {result && onViewReasoning && (
+        <button
+          onClick={() => onViewReasoning(result)}
+          className="mt-4 inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-gray-500 hover:text-[#bca7ff] transition"
+        >
+          View reasoning
+          <span aria-hidden>→</span>
+        </button>
+      )}
 
       {entry.error && !result && (
         <p className="mt-3 rounded-xl border border-amber-400/25 bg-amber-500/10 p-3 text-xs text-amber-200">{entry.error}</p>
-      )}
-    </div>
-  );
-}
-
-function AgentFlowBadge({ result }: { result: AskQuestionResponse }) {
-  const firedIds = new Set<string>();
-  for (const log of result.agent_logs) {
-    const id = classifyAgentNode(log.agent);
-    if (id) firedIds.add(id);
-  }
-
-  return (
-    <div className="mt-4 rounded-xl border border-white/10 bg-[linear-gradient(135deg,rgba(130,67,234,0.08),rgba(37,99,235,0.04))] px-3.5 py-2.5">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <span className="text-[10px] font-bold uppercase tracking-[0.24em] text-[#bca7ff]">Agent flow</span>
-        <div className="flex items-center gap-0.5">
-          {AGENT_NODES.map((node, index) => {
-            const fired = firedIds.has(node.id);
-            return (
-              <span key={node.id} className="flex items-center gap-0.5">
-                <span
-                  className={`flex h-5 w-5 items-center justify-center rounded text-[9px] font-bold ${
-                    fired
-                      ? 'bg-[linear-gradient(135deg,#8243EA,#2563EB)] text-white'
-                      : 'border border-white/15 bg-white/[0.03] text-gray-600'
-                  }`}
-                  title={`${node.label}: ${fired ? 'fired' : 'skipped'}`}
-                >
-                  {node.symbol}
-                </span>
-                {index < AGENT_NODES.length - 1 && (
-                  <span className={`text-[9px] ${fired ? 'text-[#bca7ff]' : 'text-gray-700'}`}>▸</span>
-                )}
-              </span>
-            );
-          })}
-        </div>
-        <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400">
-          <span className="flex items-center gap-1.5"><span className="text-emerald-300">✓</span>Pandas</span>
-          <span className="flex items-center gap-1.5"><span className="font-mono text-gray-300">{result.supporting_data.length}</span>rows</span>
-          <span className="flex items-center gap-1.5"><span className={result.success ? 'text-emerald-300' : 'text-amber-300'}>{result.success ? '✓' : '⚠'}</span>Validator</span>
-          <span className="font-mono text-gray-500">{result.execution_time_ms}ms</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function EvidenceDrawer({ result }: { result: AskQuestionResponse }) {
-  const [active, setActive] = useState<'rows' | 'code' | null>(null);
-
-  return (
-    <div className="mt-3 flex flex-wrap items-center gap-1 text-[11px]">
-      <button
-        onClick={() => setActive(active === 'rows' ? null : 'rows')}
-        className={`rounded-md px-2 py-1 font-semibold uppercase tracking-[0.16em] transition ${
-          active === 'rows' ? 'bg-white/10 text-white' : 'text-gray-500 hover:text-gray-200'
-        }`}
-      >
-        ▾ {result.supporting_data.length} source rows
-      </button>
-      <button
-        onClick={() => setActive(active === 'code' ? null : 'code')}
-        className={`rounded-md px-2 py-1 font-semibold uppercase tracking-[0.16em] transition ${
-          active === 'code' ? 'bg-white/10 text-white' : 'text-gray-500 hover:text-gray-200'
-        }`}
-      >
-        ▾ Executed code
-      </button>
-
-      {active === 'rows' && (
-        <div className="mt-2 w-full">
-          <CompactTable rows={result.supporting_data} />
-        </div>
-      )}
-      {active === 'code' && (
-        <div className="mt-2 w-full space-y-2">
-          <CodeBlock label="Pandas" content={result.query_logic.pandas} />
-          <CodeBlock label="SQL · translation" content={result.query_logic.sql_like} />
-        </div>
       )}
     </div>
   );
@@ -370,20 +279,20 @@ function classifyAgentNode(agent: string): string | null {
 }
 
 function ReasoningTheater({
-  visibleLogs,
+  progress,
   pendingResult,
   question,
 }: {
-  visibleLogs: AgentLog[];
+  progress: number;
   pendingResult: AskQuestionResponse | null | undefined;
   question: string;
 }) {
-  const activeIndex = Math.max(visibleLogs.length - 1, 0);
-  const activeLog = visibleLogs[activeIndex];
-  const activeId = activeLog ? classifyAgentNode(activeLog.agent) : null;
-  const activeNode = activeId ? AGENT_NODES.find((node) => node.id === activeId) : null;
-  const completedCount = Math.max(visibleLogs.length - 1, 0);
-  const totalCount = AGENT_NODES.length;
+  const N = AGENT_NODES.length;
+  const clamped = Math.min(Math.max(progress, 0), N);
+  const currentIdx = Math.min(Math.floor(clamped), N - 1);
+  const activeNode = AGENT_NODES[currentIdx];
+  const activeMessage = REASONING_STAGES[currentIdx]?.message ?? '';
+  const overallPct = (clamped / N) * 100;
 
   return (
     <div className="agentic-slide-up cockpit-glow-border relative overflow-hidden rounded-3xl border-2 bg-[linear-gradient(180deg,#fdfcff,#f3f1fb)] text-[#0f1020] shadow-[0_30px_80px_rgba(130,67,234,0.18)]">
@@ -399,43 +308,95 @@ function ReasoningTheater({
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <span className="rounded-md bg-[#8243EA]/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-[#5b21b6]">
-            Step {Math.min(visibleLogs.length, totalCount)} / {totalCount}
+            Step {Math.min(currentIdx + 1, N)} / {N}
           </span>
           <span className="hidden font-mono text-[10px] text-[#9ea0b3] md:inline">
-            {pendingResult ? 'response staged' : 'waiting…'}
+            {pendingResult ? 'response staged' : 'awaiting response…'}
           </span>
         </div>
       </div>
 
-      <div className="relative px-6 pt-5 pb-2">
-        <div className="grid grid-cols-5 items-stretch gap-0">
+      <div className="relative h-1 overflow-hidden bg-[#eef0f7]">
+        <div
+          className="h-full bg-[linear-gradient(90deg,#8243EA,#2563EB)]"
+          style={{ width: `${overallPct}%` }}
+        />
+      </div>
+
+      <div className="relative px-6 pt-6 pb-2">
+        <div className="relative grid grid-cols-5 items-start gap-0">
           {AGENT_NODES.map((node, index) => {
-            const isComplete = index < completedCount;
-            const isActive = index === completedCount && visibleLogs.length > 0;
-            const symbolTone = isActive
-              ? 'bg-[linear-gradient(135deg,#8243EA,#2563EB)] text-white shadow-[0_18px_40px_rgba(130,67,234,0.45)]'
-              : isComplete
-                ? 'bg-emerald-500 text-white shadow-[0_8px_20px_rgba(16,185,129,0.3)]'
-                : 'bg-white text-[#9ea0b3] border-2 border-dashed border-[#dadcea]';
-            const labelTone = isActive ? 'text-[#0f1020]' : isComplete ? 'text-[#0f1020]' : 'text-[#9ea0b3]';
-            const numberTone = isActive ? 'text-[#5b21b6]' : isComplete ? 'text-emerald-700' : 'text-[#cfd1de]';
+            const activation = Math.max(0, Math.min(2, clamped - index));
+
+            const pendingOpacity = Math.max(0, 1 - activation * 2.2);
+            const activeOpacity = activation <= 1
+              ? Math.min(1, activation * 2)
+              : Math.max(0, (1.6 - activation) * 1.8);
+            const doneOpacity = Math.max(0, Math.min(1, (activation - 0.85) * 2.2));
+
+            const graySymbolOpacity = pendingOpacity;
+            const whiteSymbolOpacity = activation <= 1
+              ? Math.min(1, activation * 2.5)
+              : Math.max(0, (1.4 - activation) * 2);
+            const checkOpacity = Math.max(0, Math.min(1, (activation - 1) * 2.5));
+
+            const scale = 0.92 + Math.min(activation, 1) * 0.08;
+            const glowStrength = Math.min(1, activation <= 1 ? activation : Math.max(0, 1.8 - activation));
+
+            const labelDarkness = Math.min(1, activation * 1.5);
+            const labelColor = `rgba(15, 16, 32, ${0.38 + labelDarkness * 0.62})`;
+            const numberColor = activation >= 1
+              ? `rgba(4, 120, 87, ${Math.min(1, (activation - 0.8) * 2)})`
+              : activation > 0
+                ? `rgba(91, 33, 182, ${Math.min(1, activation * 1.5)})`
+                : '#cfd1de';
+
+            const connectorFill = Math.max(0, Math.min(1, clamped - index));
+            const connectorGreen = Math.max(0, Math.min(1, (clamped - index - 1) * 2));
 
             return (
               <div key={node.id} className="relative flex flex-col items-center">
-                {index < AGENT_NODES.length - 1 && (
-                  <div className="absolute right-0 top-7 z-0 h-1 w-full -translate-y-1/2 translate-x-1/2 overflow-hidden rounded-full bg-[#e7e9f1]">
-                    {(isComplete || isActive) && (
-                      <div className={`h-full w-full ${isComplete ? 'bg-[linear-gradient(90deg,#8243EA,#10b981)]' : 'cockpit-flow w-1/2'}`} />
-                    )}
+                {index < N - 1 && (
+                  <div className="absolute left-1/2 top-7 z-0 h-1 w-full -translate-y-1/2 overflow-hidden rounded-full bg-[#e7e9f1]">
+                    <div
+                      className="absolute inset-y-0 left-0 bg-[linear-gradient(90deg,#8243EA,#2563EB)]"
+                      style={{ width: `${connectorFill * 100}%` }}
+                    />
+                    <div
+                      className="absolute inset-y-0 left-0 bg-emerald-500"
+                      style={{ width: `${connectorFill * 100}%`, opacity: connectorGreen }}
+                    />
                   </div>
                 )}
-                <div className="relative z-10">
-                  <div className={`flex h-14 w-14 items-center justify-center rounded-2xl text-xl font-bold transition ${symbolTone} ${isActive ? 'cockpit-active-pulse' : ''}`}>
-                    {isComplete && !isActive ? <span className="cockpit-check-in">✓</span> : node.symbol}
+                <div className="relative z-10 h-14 w-14" style={{ transform: `scale(${scale})`, transformOrigin: 'center' }}>
+                  <div
+                    className="absolute inset-0 rounded-2xl bg-white"
+                    style={{ opacity: pendingOpacity, boxShadow: 'inset 0 0 0 2px #dadcea' }}
+                  />
+                  <div
+                    className="absolute inset-0 rounded-2xl"
+                    style={{
+                      opacity: activeOpacity,
+                      background: 'linear-gradient(135deg,#8243EA,#2563EB)',
+                      boxShadow: `0 ${18 * glowStrength}px ${40 * glowStrength}px rgba(130,67,234,${0.45 * glowStrength})`,
+                    }}
+                  />
+                  <div
+                    className="absolute inset-0 rounded-2xl"
+                    style={{
+                      opacity: doneOpacity,
+                      background: '#10b981',
+                      boxShadow: `0 ${10 * doneOpacity}px ${22 * doneOpacity}px rgba(16,185,129,${0.32 * doneOpacity})`,
+                    }}
+                  />
+                  <div className="relative flex h-full w-full items-center justify-center text-xl font-bold">
+                    <span className="absolute text-[#9ea0b3]" style={{ opacity: graySymbolOpacity }}>{node.symbol}</span>
+                    <span className="absolute text-white" style={{ opacity: whiteSymbolOpacity }}>{node.symbol}</span>
+                    <span className="absolute text-white" style={{ opacity: checkOpacity }}>✓</span>
                   </div>
                 </div>
-                <p className={`mt-2 font-mono text-[10px] font-bold ${numberTone}`}>0{index + 1}</p>
-                <p className={`mt-0.5 text-[10px] uppercase tracking-[0.18em] font-bold ${labelTone}`}>{node.label}</p>
+                <p className="mt-2 font-mono text-[10px] font-bold" style={{ color: numberColor }}>0{index + 1}</p>
+                <p className="mt-0.5 text-[10px] uppercase tracking-[0.18em] font-bold" style={{ color: labelColor }}>{node.label}</p>
               </div>
             );
           })}
@@ -444,66 +405,63 @@ function ReasoningTheater({
 
       <div className="relative grid grid-cols-1 gap-0 lg:grid-cols-[1.2fr_1fr]">
         <div className="relative border-t border-[#e3e5ee] px-6 py-5">
-          {activeNode && activeLog ? (
-            <>
-              <p className="text-[10px] font-bold uppercase tracking-[0.32em] text-[#5b21b6]">Now executing</p>
-              <div className="mt-3 flex items-start gap-4">
-                <div className="cockpit-active-pulse flex h-16 w-16 flex-none items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#8243EA,#2563EB)] text-2xl font-bold text-white">
-                  {activeNode.symbol}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-xl font-semibold leading-tight text-[#0f1020]">{activeNode.label}</p>
-                  <p className="mt-1.5 text-[15px] leading-6 text-[#3d3f55]">{activeLog.message || activeNode.role}</p>
-                </div>
-              </div>
-              <div className="mt-4 flex items-center gap-2 text-[11px] text-[#7a7d92]">
-                <div className="flex items-center gap-1">
-                  <span className="cockpit-dot h-1.5 w-1.5 rounded-full bg-[#8243EA]" style={{ animationDelay: '0s' }} />
-                  <span className="cockpit-dot h-1.5 w-1.5 rounded-full bg-[#8243EA]" style={{ animationDelay: '0.18s' }} />
-                  <span className="cockpit-dot h-1.5 w-1.5 rounded-full bg-[#8243EA]" style={{ animationDelay: '0.36s' }} />
-                </div>
-                <span className="uppercase tracking-[0.18em]">Reasoning</span>
-              </div>
-            </>
-          ) : (
-            <p className="text-sm text-[#7a7d92]">Initialising the engine…</p>
-          )}
+          <p className="text-[10px] font-bold uppercase tracking-[0.32em] text-[#5b21b6]">Now executing</p>
+          <div key={currentIdx} className="cockpit-trace mt-3 flex items-start gap-4">
+            <div className="cockpit-active-pulse flex h-16 w-16 flex-none items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#8243EA,#2563EB)] text-2xl font-bold text-white">
+              {activeNode.symbol}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xl font-semibold leading-tight text-[#0f1020]">{activeNode.label}</p>
+              <p className="mt-1.5 text-[15px] leading-6 text-[#3d3f55]">{activeMessage || activeNode.role}</p>
+            </div>
+          </div>
+          <div className="mt-4 flex items-center gap-2 text-[11px] text-[#7a7d92]">
+            <div className="flex items-center gap-1">
+              <span className="cockpit-dot h-1.5 w-1.5 rounded-full bg-[#8243EA]" style={{ animationDelay: '0s' }} />
+              <span className="cockpit-dot h-1.5 w-1.5 rounded-full bg-[#8243EA]" style={{ animationDelay: '0.18s' }} />
+              <span className="cockpit-dot h-1.5 w-1.5 rounded-full bg-[#8243EA]" style={{ animationDelay: '0.36s' }} />
+            </div>
+            <span className="uppercase tracking-[0.18em]">Reasoning</span>
+          </div>
         </div>
 
         <div className="relative border-t border-[#e3e5ee] bg-white/70 px-6 py-5 lg:border-l">
           <p className="text-[10px] font-bold uppercase tracking-[0.32em] text-[#7a7d92]">Timeline</p>
           <ol className="mt-3 space-y-2.5">
-            {visibleLogs.map((log, index) => {
-              const isActive = index === completedCount;
+            {AGENT_NODES.map((node, index) => {
+              const activation = Math.max(0, Math.min(2, clamped - index));
+              const itemOpacity = 0.35 + Math.min(1, activation * 1.5) * 0.65;
+              const badgePending = Math.max(0, 1 - activation * 2);
+              const badgeActive = activation <= 1
+                ? Math.min(1, activation * 2)
+                : Math.max(0, (1.4 - activation) * 2);
+              const badgeDone = Math.max(0, Math.min(1, (activation - 1) * 2));
+              const labelCol = activation > 0.3 ? '#5b21b6' : '#9ea0b3';
+              const bodyCol = `rgba(61, 63, 85, ${0.4 + Math.min(1, activation * 1.2) * 0.6})`;
               return (
-                <li
-                  key={`${log.agent}-${index}`}
-                  className="cockpit-trace flex gap-3"
-                  style={{ animationDelay: `${index * 60}ms` }}
-                >
-                  <span className={`mt-0.5 inline-flex h-6 w-6 flex-none items-center justify-center rounded-md text-[10px] font-bold ${
-                    isActive ? 'bg-[#8243EA]/15 text-[#5b21b6]' : 'bg-emerald-500 text-white'
-                  }`}>
-                    {isActive ? index + 1 : '✓'}
-                  </span>
+                <li key={node.id} className="flex gap-3" style={{ opacity: itemOpacity }}>
+                  <div className="relative mt-0.5 h-6 w-6 flex-none">
+                    <span className="absolute inset-0 flex items-center justify-center rounded-md border-2 border-dashed border-[#cfd1de] text-[10px] font-bold text-[#cfd1de]" style={{ opacity: badgePending }}>
+                      {index + 1}
+                    </span>
+                    <span className="absolute inset-0 flex items-center justify-center rounded-md bg-[#8243EA]/15 text-[10px] font-bold text-[#5b21b6]" style={{ opacity: badgeActive }}>
+                      {index + 1}
+                    </span>
+                    <span className="absolute inset-0 flex items-center justify-center rounded-md bg-emerald-500 text-[10px] font-bold text-white" style={{ opacity: badgeDone }}>
+                      ✓
+                    </span>
+                  </div>
                   <div className="min-w-0">
-                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#5b21b6]">{log.agent}</p>
-                    <p className="text-[12px] leading-snug text-[#3d3f55]">{log.message}</p>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: labelCol }}>
+                      {node.label}
+                    </p>
+                    <p className="text-[12px] leading-snug" style={{ color: bodyCol }}>
+                      {REASONING_STAGES[index]?.message}
+                    </p>
                   </div>
                 </li>
               );
             })}
-            {Array.from({ length: Math.max(0, totalCount - visibleLogs.length) }).map((_, index) => (
-              <li key={`pending-${index}`} className="flex gap-3 opacity-40">
-                <span className="mt-0.5 inline-flex h-6 w-6 flex-none items-center justify-center rounded-md border-2 border-dashed border-[#cfd1de] text-[10px] font-bold text-[#cfd1de]">
-                  {visibleLogs.length + index + 1}
-                </span>
-                <div>
-                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#9ea0b3]">{AGENT_NODES[visibleLogs.length + index]?.label ?? 'Pending'}</p>
-                  <p className="text-[12px] leading-snug text-[#9ea0b3]">Pending.</p>
-                </div>
-              </li>
-            ))}
           </ol>
         </div>
       </div>
@@ -512,18 +470,170 @@ function ReasoningTheater({
 }
 
 
-function CompactTable({ rows }: { rows: Array<Record<string, unknown>> }) {
-  if (rows.length === 0) {
-    return <p className="text-xs text-gray-500">No rows returned.</p>;
+function ReasoningModal({
+  result,
+  question,
+  onClose,
+}: {
+  result: AskQuestionResponse;
+  question: string;
+  onClose: () => void;
+}) {
+  const [activeTab, setActiveTab] = useState<'narrative' | 'timeline' | 'rows' | 'code'>('narrative');
+  const firedIds = new Set<string>();
+  for (const log of result.agent_logs) {
+    const id = classifyAgentNode(log.agent);
+    if (id) firedIds.add(id);
   }
-  const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).slice(0, 6);
+  const narrative = result.reasoning?.narrative ?? [];
+
   return (
-    <div className="overflow-x-auto rounded-xl border border-white/8">
-      <table className="w-full min-w-[420px] text-xs">
-        <thead className="bg-[#11121d]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={onClose}>
+      <div
+        className="agentic-slide-up relative w-full max-w-4xl max-h-[85vh] overflow-hidden rounded-3xl border-2 border-[#e3e5ee] bg-[linear-gradient(180deg,#fdfcff,#f3f1fb)] text-[#0f1020] shadow-[0_40px_100px_rgba(0,0,0,0.5)] flex flex-col"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="cockpit-grid-light absolute inset-0 opacity-100 pointer-events-none" />
+
+        <div className="relative flex items-center justify-between border-b border-[#e3e5ee] bg-white/85 px-6 py-4 backdrop-blur">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[linear-gradient(135deg,#8243EA,#2563EB)] text-[10px] font-bold uppercase text-white shadow-[0_8px_22px_rgba(130,67,234,0.45)]">DI</span>
+            <div className="min-w-0">
+              <p className="text-[10px] uppercase tracking-[0.32em] text-[#7a7d92] font-bold">Reasoning · defensibility</p>
+              <p className="truncate text-sm font-semibold text-[#0f1020]">"{question}"</p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-[#e3e5ee] bg-white px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-[#5a5c70] hover:border-[#8243EA]/40 hover:text-[#5b21b6] transition"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="relative border-b border-[#e3e5ee] bg-white/70 px-6 py-5">
+          <div className="grid grid-cols-5 items-start">
+            {AGENT_NODES.map((node, index) => {
+              const fired = firedIds.has(node.id);
+              const symbolTone = fired
+                ? 'bg-emerald-500 text-white shadow-[0_8px_20px_rgba(16,185,129,0.3)]'
+                : 'bg-white text-[#cfd1de] border-2 border-dashed border-[#dadcea]';
+              return (
+                <div key={node.id} className="relative flex flex-col items-center">
+                  {index < AGENT_NODES.length - 1 && (
+                    <div className="absolute left-1/2 top-6 z-0 h-1 w-full -translate-y-1/2 overflow-hidden rounded-full bg-[#e7e9f1]">
+                      <div className={`h-full transition-all duration-500 ${fired ? 'w-full bg-emerald-500' : 'w-0'}`} />
+                    </div>
+                  )}
+                  <div className={`relative z-10 flex h-12 w-12 items-center justify-center rounded-2xl text-lg font-bold ${symbolTone}`}>
+                    {fired ? '✓' : node.symbol}
+                  </div>
+                  <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.18em] text-[#0f1020]">{node.label}</p>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <StatCard label="Verdict" value={result.success ? 'Verified' : 'Needs review'} tone={result.success ? 'emerald' : 'amber'} />
+            <StatCard label="Latency" value={`${result.execution_time_ms} ms`} />
+            <StatCard label="Source rows" value={String(result.supporting_data.length)} />
+            <StatCard label="Steps" value={String(result.agent_logs.length)} />
+          </div>
+        </div>
+
+        <div className="relative flex flex-none items-center gap-1 border-b border-[#e3e5ee] bg-white/60 px-4 py-2">
+          {(['narrative', 'timeline', 'rows', 'code'] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`rounded-md px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.18em] transition ${
+                activeTab === tab
+                  ? 'bg-[#8243EA]/10 text-[#5b21b6]'
+                  : 'text-[#7a7d92] hover:text-[#0f1020]'
+              }`}
+            >
+              {tab === 'narrative' ? 'How it works' :
+               tab === 'timeline' ? 'Agent timeline' :
+               tab === 'rows' ? `Source rows · ${result.supporting_data.length}` :
+               'Executed code'}
+            </button>
+          ))}
+        </div>
+
+        <div className="relative flex-1 overflow-auto bg-white/50 px-6 py-5">
+          {activeTab === 'narrative' && (
+            narrative.length === 0 ? (
+              <p className="text-sm text-[#7a7d92]">No narrative available — try re-running the query after the latest backend build.</p>
+            ) : (
+              <ol className="space-y-5">
+                {narrative.map((step, index) => (
+                  <li key={`${step.title}-${index}`} className="relative pl-11">
+                    <span className="absolute left-0 top-0 flex h-8 w-8 items-center justify-center rounded-full bg-[linear-gradient(135deg,#8243EA,#2563EB)] text-xs font-bold text-white shadow-[0_6px_16px_rgba(130,67,234,0.3)]">
+                      {index + 1}
+                    </span>
+                    <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-[#5b21b6]">
+                      {step.title}
+                    </p>
+                    <p className="mt-1 whitespace-pre-wrap text-[14px] leading-7 text-[#1f2037]">{step.body}</p>
+                  </li>
+                ))}
+              </ol>
+            )
+          )}
+
+          {activeTab === 'timeline' && (
+            <ol className="space-y-3">
+              {result.agent_logs.map((log, index) => (
+                <li key={`${log.agent}-${index}`} className="flex gap-3">
+                  <span className="mt-0.5 inline-flex h-6 w-6 flex-none items-center justify-center rounded-md bg-emerald-500 text-[10px] font-bold text-white">
+                    ✓
+                  </span>
+                  <div>
+                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[#5b21b6]">{log.agent}</p>
+                    <p className="text-[13px] leading-snug text-[#3d3f55]">{log.message}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
+
+          {activeTab === 'rows' && <LightTable rows={result.supporting_data} />}
+
+          {activeTab === 'code' && (
+            <div className="space-y-3">
+              <p className="text-[12px] text-[#5a5c70] leading-5">These are the exact operations the Data Agent ran against your workbook. Useful for engineers; the <strong>How it works</strong> tab explains the same thing in plain English.</p>
+              <LightCodeBlock label="Pandas (executed)" content={result.query_logic.pandas} />
+              <LightCodeBlock label="SQL · translation" content={result.query_logic.sql_like} />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatCard({ label, value, tone }: { label: string; value: string; tone?: 'emerald' | 'amber' }) {
+  const toneClass =
+    tone === 'emerald' ? 'text-emerald-700' : tone === 'amber' ? 'text-amber-700' : 'text-[#0f1020]';
+  return (
+    <div className="rounded-xl border border-[#e3e5ee] bg-white px-3.5 py-2.5">
+      <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a7d92]">{label}</p>
+      <p className={`mt-1 font-mono text-base font-bold ${toneClass}`}>{value}</p>
+    </div>
+  );
+}
+
+function LightTable({ rows }: { rows: Array<Record<string, unknown>> }) {
+  if (rows.length === 0) return <p className="text-sm text-[#7a7d92]">No rows returned.</p>;
+  const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).slice(0, 8);
+  return (
+    <div className="overflow-x-auto rounded-xl border border-[#e3e5ee] bg-white">
+      <table className="w-full min-w-[420px] text-[12px]">
+        <thead className="bg-[#f5f6fb]">
           <tr>
             {columns.map((column) => (
-              <th key={column} className="px-3 py-2 text-left font-semibold uppercase tracking-[0.14em] text-gray-400">
+              <th key={column} className="px-3 py-2 text-left font-bold uppercase tracking-[0.14em] text-[#5a5c70]">
                 {column.replaceAll('_', ' ')}
               </th>
             ))}
@@ -531,9 +641,9 @@ function CompactTable({ rows }: { rows: Array<Record<string, unknown>> }) {
         </thead>
         <tbody>
           {rows.map((row, rowIndex) => (
-            <tr key={rowIndex} className="border-t border-white/5">
+            <tr key={rowIndex} className="border-t border-[#e3e5ee]">
               {columns.map((column) => (
-                <td key={column} className="px-3 py-2 align-top text-gray-200">
+                <td key={column} className="px-3 py-2 align-top text-[#0f1020]">
                   {String(row[column] ?? '—')}
                 </td>
               ))}
@@ -545,16 +655,26 @@ function CompactTable({ rows }: { rows: Array<Record<string, unknown>> }) {
   );
 }
 
-function CodeBlock({ label, content }: { label: string; content: string }) {
+function LightCodeBlock({ label, content }: { label: string; content: string }) {
   return (
-    <div className="rounded-xl border border-white/8 bg-[#080912] p-3">
-      <p className="text-[10px] uppercase tracking-[0.22em] text-gray-500">{label}</p>
-      <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs leading-6 text-emerald-200">
+    <div className="rounded-xl border border-[#e3e5ee] bg-white p-3.5">
+      <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a7d92]">{label}</p>
+      <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-[12px] leading-6 text-[#0f1020]">
         {content || '— no code —'}
       </pre>
     </div>
   );
 }
+
+const TABLE_PALETTE = [
+  { band: '#a78bfa', text: '#5b21b6', glow: 'rgba(167,139,250,0.3)' },
+  { band: '#60a5fa', text: '#1e40af', glow: 'rgba(96,165,250,0.3)' },
+  { band: '#34d399', text: '#047857', glow: 'rgba(52,211,153,0.3)' },
+  { band: '#fbbf24', text: '#a16207', glow: 'rgba(251,191,36,0.3)' },
+  { band: '#f87171', text: '#b91c1c', glow: 'rgba(248,113,113,0.3)' },
+  { band: '#2dd4bf', text: '#0f766e', glow: 'rgba(45,212,191,0.3)' },
+  { band: '#f472b6', text: '#9d174d', glow: 'rgba(244,114,182,0.3)' },
+];
 
 function WorkbookInspector({
   open,
@@ -570,103 +690,206 @@ function WorkbookInspector({
   semanticSummary: { entities: string[]; metrics: string[] };
 }) {
   if (!open) return null;
+
   return (
-    <div className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={onClose}>
       <div
-        className="absolute right-0 top-0 h-screen w-full max-w-[640px] overflow-auto border-l border-white/8 bg-[#0a0b14] p-6"
+        className="agentic-slide-up relative flex h-[92vh] w-full max-w-[1200px] flex-col overflow-hidden rounded-3xl border-2 border-[#e3e5ee] bg-[linear-gradient(180deg,#fdfcff,#f3f1fb)] text-[#0f1020] shadow-[0_40px_100px_rgba(0,0,0,0.5)]"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-[10px] uppercase tracking-[0.32em] text-[#8b8da3] font-semibold">03 · Semantic Layer</p>
-            <h2 className="mt-1 text-xl font-semibold text-white">Workbook inspector</h2>
+        <div className="cockpit-grid-light absolute inset-0 opacity-100 pointer-events-none" />
+
+        <div className="relative flex items-center justify-between border-b border-[#e3e5ee] bg-white/85 px-6 py-4 backdrop-blur">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[linear-gradient(135deg,#8243EA,#2563EB)] text-[10px] font-bold uppercase text-white shadow-[0_8px_22px_rgba(130,67,234,0.45)]">DI</span>
+            <div className="min-w-0">
+              <p className="text-[10px] uppercase tracking-[0.32em] text-[#7a7d92] font-bold">Semantic Layer</p>
+              <p className="text-base font-semibold text-[#0f1020]">Workbook schema · relationships</p>
+            </div>
           </div>
-          <button onClick={onClose} className="rounded-lg border border-white/10 px-3 py-1.5 text-xs uppercase tracking-[0.18em] text-gray-300 hover:text-white">
-            Close
-          </button>
+          <div className="flex items-center gap-4">
+            <div className="hidden items-center gap-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-[#7a7d92] md:flex">
+              <span className="flex items-center gap-1.5"><span className="inline-block h-2 w-2 rounded-sm bg-[#8243EA]" />PK</span>
+              <span className="flex items-center gap-1.5"><span className="inline-block h-2 w-2 rounded-sm bg-[#f59e0b]" />Dim</span>
+              <span className="flex items-center gap-1.5"><span className="inline-block h-2 w-2 rounded-sm bg-[#10b981]" />Metric</span>
+            </div>
+            <button onClick={onClose} className="rounded-lg border border-[#e3e5ee] bg-white px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-[#5a5c70] hover:border-[#8243EA]/40 hover:text-[#5b21b6] transition">
+              Close
+            </button>
+          </div>
         </div>
 
-        <section className="mt-6">
-          <p className="text-[10px] uppercase tracking-[0.22em] text-gray-500">Entities</p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {semanticSummary.entities.length === 0 ? (
-              <span className="text-xs text-gray-500">No entities inferred.</span>
-            ) : (
-              semanticSummary.entities.map((entity) => (
-                <span key={entity} className="rounded-md border border-[#8243EA]/30 bg-[#8243EA]/10 px-2 py-1 text-[11px] uppercase tracking-[0.16em] text-[#d8c9ff]">
-                  {entity}
-                </span>
-              ))
+        <div className="relative flex-1 overflow-auto px-6 py-6">
+          {tables.length === 0 ? (
+            <p className="text-sm text-[#7a7d92]">Prepare the workbook to inspect its schema.</p>
+          ) : (
+            <ERDiagram tables={tables} relationships={relationships} />
+          )}
+        </div>
+
+        <div className="relative border-t border-[#e3e5ee] bg-white/75 px-6 py-3">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[11px] text-[#5a5c70]">
+            <span><span className="font-bold text-[#0f1020]">{tables.length}</span> tables</span>
+            <span><span className="font-bold text-[#0f1020]">{relationships.length}</span> inferred joins</span>
+            {semanticSummary.entities.length > 0 && (
+              <span className="truncate"><span className="font-bold text-[#0f1020]">Entities:</span> {semanticSummary.entities.slice(0, 6).join(', ')}</span>
             )}
           </div>
-        </section>
-
-        <section className="mt-6">
-          <p className="text-[10px] uppercase tracking-[0.22em] text-gray-500">Metrics</p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {semanticSummary.metrics.length === 0 ? (
-              <span className="text-xs text-gray-500">No metrics inferred.</span>
-            ) : (
-              semanticSummary.metrics.slice(0, 16).map((metric) => (
-                <span key={metric} className="rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] uppercase tracking-[0.16em] text-gray-300">
-                  {metric}
-                </span>
-              ))
-            )}
-          </div>
-        </section>
-
-        <section className="mt-6">
-          <p className="text-[10px] uppercase tracking-[0.22em] text-gray-500">Tables</p>
-          <div className="mt-3 space-y-3">
-            {tables.length === 0 ? (
-              <p className="text-sm text-gray-500">Process the workbook to inspect tables.</p>
-            ) : (
-              tables.map((table) => (
-                <div key={table.name} className="rounded-xl border border-white/8 bg-[#11121d] p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <h4 className="text-sm font-semibold text-white">{table.name.replaceAll('_', ' ')}</h4>
-                      <p className="text-[10px] uppercase tracking-[0.18em] text-gray-500">{table.rowCount} rows</p>
-                    </div>
-                    {table.primaryKey && (
-                      <span className="rounded-md bg-[#8243EA]/15 px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] text-[#d8c9ff]">
-                        PK · {table.primaryKey}
-                      </span>
-                    )}
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    {table.columns.slice(0, 8).map((column) => (
-                      <span key={column} className="rounded border border-white/8 bg-[#0a0b14] px-2 py-0.5 text-[11px] text-gray-400">
-                        {column}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-
-        {relationships.length > 0 && (
-          <section className="mt-6">
-            <p className="text-[10px] uppercase tracking-[0.22em] text-gray-500">Relationships</p>
-            <div className="mt-3 space-y-2">
-              {relationships.map((relationship) => (
-                <div
-                  key={`${relationship.from}-${relationship.to}-${relationship.key}`}
-                  className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-[#11121d] px-3 py-2 text-xs text-gray-300"
-                >
-                  <span>{relationship.from}</span>
-                  <span className="font-mono text-[#bca7ff]">{relationship.key}</span>
-                  <span>{relationship.to}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
+        </div>
       </div>
     </div>
+  );
+}
+
+interface TablePositioned extends TableView {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  paletteIndex: number;
+}
+
+function ERDiagram({
+  tables,
+  relationships,
+}: {
+  tables: TableView[];
+  relationships: RelationshipView[];
+}) {
+  const MAX_COLUMNS = 7;
+  const CARD_WIDTH = 260;
+  const ROW_HEIGHT = 22;
+  const HEADER_HEIGHT = 64;
+  const CELL_PADDING_X = 56;
+  const CELL_PADDING_Y = 44;
+  const cols = Math.min(3, Math.max(1, tables.length));
+  const rows = Math.ceil(tables.length / cols);
+
+  const positioned: TablePositioned[] = tables.map((table, index) => {
+    const col = index % cols;
+    const row = Math.floor(index / cols);
+    const visibleColCount = Math.min(table.columns.length, MAX_COLUMNS);
+    const height = HEADER_HEIGHT + visibleColCount * ROW_HEIGHT + (table.columns.length > MAX_COLUMNS ? ROW_HEIGHT : 0);
+    const cardCellWidth = CARD_WIDTH + CELL_PADDING_X;
+    const cardCellHeight = HEADER_HEIGHT + MAX_COLUMNS * ROW_HEIGHT + ROW_HEIGHT + CELL_PADDING_Y;
+    return {
+      ...table,
+      x: col * cardCellWidth + CELL_PADDING_X / 2,
+      y: row * cardCellHeight + CELL_PADDING_Y / 2,
+      width: CARD_WIDTH,
+      height,
+      paletteIndex: index % TABLE_PALETTE.length,
+    };
+  });
+
+  const byName = new Map(positioned.map((table) => [table.name, table]));
+  const viewBoxWidth = cols * (CARD_WIDTH + CELL_PADDING_X);
+  const viewBoxHeight = rows * (HEADER_HEIGHT + MAX_COLUMNS * ROW_HEIGHT + ROW_HEIGHT + CELL_PADDING_Y);
+
+  const edges = relationships.flatMap((relationship) => {
+    const from = byName.get(relationship.from);
+    const to = byName.get(relationship.to);
+    if (!from || !to) return [];
+    const fromCx = from.x + from.width / 2;
+    const toCx = to.x + to.width / 2;
+    const fromRightSide = toCx > fromCx;
+    const fromX = fromRightSide ? from.x + from.width : from.x;
+    const toX = fromRightSide ? to.x : to.x + to.width;
+    const fromY = from.y + HEADER_HEIGHT / 2;
+    const toY = to.y + HEADER_HEIGHT / 2;
+    const midX = (fromX + toX) / 2;
+    const path = `M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`;
+    const labelX = (fromX + toX) / 2;
+    const labelY = (fromY + toY) / 2 - 6;
+    return [{ key: `${relationship.from}-${relationship.to}-${relationship.key}`, path, labelX, labelY, label: relationship.key }];
+  });
+
+  return (
+    <svg
+      viewBox={`0 0 ${viewBoxWidth} ${viewBoxHeight}`}
+      className="block w-full"
+      style={{ minHeight: '540px' }}
+    >
+      <defs>
+        <marker id="erArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 Z" fill="#8243EA" />
+        </marker>
+      </defs>
+
+      {edges.map((edge) => (
+        <g key={edge.key}>
+          <path d={edge.path} fill="none" stroke="#8243EA" strokeWidth="1.5" strokeDasharray="4 3" markerEnd="url(#erArrow)" opacity={0.75} />
+          <g transform={`translate(${edge.labelX - 46}, ${edge.labelY - 10})`}>
+            <rect rx="6" ry="6" width="92" height="20" fill="#ffffff" stroke="#e3e5ee" />
+            <text x="46" y="14" textAnchor="middle" fontSize="11" fontFamily="monospace" fill="#5b21b6" fontWeight="700">
+              {edge.label.length > 14 ? `${edge.label.slice(0, 13)}…` : edge.label}
+            </text>
+          </g>
+        </g>
+      ))}
+
+      {positioned.map((table) => {
+        const palette = TABLE_PALETTE[table.paletteIndex];
+        const visibleCols = table.columns.slice(0, MAX_COLUMNS);
+        const extraCount = Math.max(0, table.columns.length - MAX_COLUMNS);
+        return (
+          <g key={table.name} transform={`translate(${table.x}, ${table.y})`}>
+            <rect
+              x="0"
+              y="0"
+              width={table.width}
+              height={table.height}
+              rx="12"
+              ry="12"
+              fill="#ffffff"
+              stroke={palette.band}
+              strokeWidth="1.5"
+              style={{ filter: `drop-shadow(0 8px 20px ${palette.glow})` }}
+            />
+            <rect x="0" y="0" width={table.width} height={HEADER_HEIGHT} rx="12" ry="12" fill={palette.band} />
+            <rect x="0" y={HEADER_HEIGHT - 8} width={table.width} height="8" fill={palette.band} />
+            <text x="16" y="26" fontSize="13" fontWeight="700" fill="#ffffff">
+              {table.name.length > 24 ? `${table.name.slice(0, 23)}…` : table.name}
+            </text>
+            <text x="16" y="48" fontSize="11" fill="rgba(255,255,255,0.88)">
+              {table.rowCount} rows · {table.columns.length} cols
+            </text>
+            {table.primaryKey && (
+              <g transform={`translate(${table.width - 12}, 20)`}>
+                <rect x="-52" y="-11" width="52" height="18" rx="4" fill="rgba(255,255,255,0.22)" />
+                <text x="-26" y="2" textAnchor="middle" fontSize="10" fontFamily="monospace" fontWeight="700" fill="#ffffff">
+                  PK
+                </text>
+              </g>
+            )}
+
+            {visibleCols.map((column, columnIndex) => {
+              const y = HEADER_HEIGHT + columnIndex * ROW_HEIGHT;
+              const isPk = table.primaryKey === column;
+              const dot = isPk ? '#8243EA' : /[$#]|rev|cost|price|total|amount|sale|gross|margin/i.test(column) ? '#10b981' : '#f59e0b';
+              const textColor = isPk ? palette.text : '#1f2037';
+              const fontWeight = isPk ? '700' : '500';
+              return (
+                <g key={column} transform={`translate(0, ${y})`}>
+                  {columnIndex > 0 && <line x1="12" x2={table.width - 12} y1="0" y2="0" stroke="#eef0f7" />}
+                  <circle cx="18" cy={ROW_HEIGHT / 2} r="3" fill={dot} />
+                  <text x="32" y={ROW_HEIGHT / 2 + 4} fontSize="11.5" fill={textColor} fontWeight={fontWeight}>
+                    {column.length > 26 ? `${column.slice(0, 25)}…` : column}
+                  </text>
+                </g>
+              );
+            })}
+            {extraCount > 0 && (
+              <g transform={`translate(0, ${HEADER_HEIGHT + MAX_COLUMNS * ROW_HEIGHT})`}>
+                <text x="32" y={ROW_HEIGHT / 2 + 4} fontSize="11" fill="#7a7d92" fontStyle="italic">
+                  + {extraCount} more column{extraCount === 1 ? '' : 's'}
+                </text>
+              </g>
+            )}
+          </g>
+        );
+      })}
+    </svg>
   );
 }
 
@@ -700,9 +923,11 @@ export default function Dashboard() {
   const [usageSummary, setUsageSummary] = useState<UsageSummaryResponse | null>(null);
   const [capabilityMode, setCapabilityMode] = useState<CapabilityMode>('query');
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
-  const [visibleAgentLogs, setVisibleAgentLogs] = useState<AgentLog[]>([]);
+  const [reasoningProgress, setReasoningProgress] = useState(0);
   const [pendingAssistantEntry, setPendingAssistantEntry] = useState<Extract<ChatEntry, { type: 'assistant' }> | null>(null);
   const [animationDone, setAnimationDone] = useState(false);
+  const [reasoningModal, setReasoningModal] = useState<AskQuestionResponse | null>(null);
+  const rafRef = useRef<number | null>(null);
   const conversationScrollRef = useRef<HTMLDivElement | null>(null);
 
   const accessToken = tokens?.access_token ?? '';
@@ -878,32 +1103,32 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!isAskingQuestion) return;
-    const stages: AgentLog[] = [
-      { agent: 'Planner', message: 'Decomposing the query · identifying tables and required joins.' },
-      { agent: 'Data Agent', message: 'Executing pandas operations on the live workbook.' },
-      { agent: 'Insight', message: 'Quantifying drivers, deltas, and statistical significance.' },
-      { agent: 'Simulation', message: 'Recomputing the model under counterfactual parameters.' },
-      { agent: 'Validator', message: 'Cross-checking every output. Refusing what cannot be defended.' },
-    ];
-    setVisibleAgentLogs([]);
+    setReasoningProgress(0);
     setAnimationDone(false);
-    let index = 0;
-    const timer = window.setInterval(() => {
-      index = Math.min(index + 1, stages.length);
-      setVisibleAgentLogs(stages.slice(0, index));
-      if (index >= stages.length) {
-        window.clearInterval(timer);
-        window.setTimeout(() => setAnimationDone(true), 420);
-      }
-    }, 1400);
-    return () => window.clearInterval(timer);
-  }, [isAskingQuestion]);
 
-  useEffect(() => {
-    if (isAskingQuestion) return;
-    if (pendingAssistantEntry) return;
-    setVisibleAgentLogs(latestResult?.agent_logs || []);
-  }, [isAskingQuestion, latestResult?.query_id, pendingAssistantEntry]);
+    const totalDuration = 6800;
+    const startTime = performance.now();
+
+    const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+
+    const tick = (now: number) => {
+      const elapsed = now - startTime;
+      const raw = Math.min(elapsed / totalDuration, 1);
+      const eased = easeInOutCubic(raw);
+      setReasoningProgress(eased * REASONING_STAGES.length);
+      if (raw < 1) {
+        rafRef.current = requestAnimationFrame(tick);
+      } else {
+        setReasoningProgress(REASONING_STAGES.length);
+        window.setTimeout(() => setAnimationDone(true), 300);
+      }
+    };
+
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    };
+  }, [isAskingQuestion]);
 
   useEffect(() => {
     if (animationDone && pendingAssistantEntry) {
@@ -1196,10 +1421,11 @@ export default function Dashboard() {
               scrollRef={conversationScrollRef}
               emptyState={emptyState}
               isAsking={isAskingQuestion}
+              onViewReasoning={(result) => setReasoningModal(result)}
               theater={
                 isAskingQuestion ? (
                   <ReasoningTheater
-                    visibleLogs={visibleAgentLogs}
+                    progress={reasoningProgress}
                     pendingResult={pendingAssistantEntry?.result}
                     question={[...chatHistory].reverse().find((entry) => entry.type === 'user')?.content || ''}
                   />
@@ -1261,6 +1487,23 @@ export default function Dashboard() {
           relationships={relationshipViews}
           semanticSummary={{ entities: semanticSummary.entities, metrics: semanticSummary.metrics }}
         />
+
+        {reasoningModal && (
+          <ReasoningModal
+            result={reasoningModal}
+            question={(() => {
+              const userIndex = chatHistory.findLastIndex?.(
+                (entry) => entry.type === 'assistant' && entry.result?.query_id === reasoningModal.query_id
+              );
+              if (typeof userIndex === 'number' && userIndex > 0) {
+                const prev = chatHistory[userIndex - 1];
+                if (prev.type === 'user') return prev.content;
+              }
+              return '';
+            })()}
+            onClose={() => setReasoningModal(null)}
+          />
+        )}
       </div>
     );
   };

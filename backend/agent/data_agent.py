@@ -15,8 +15,8 @@ class DataAgent:
         selected_tables = plan.get("selected_tables", [])
         working_df = self._working_dataframe(selected_tables, tables)
         working_df, synthesized_metric = self._prepare_dataframe(working_df)
-        dimension_column = self._dimension_column(working_df)
-        metric_column = self._metric_column(working_df, plan.get("metric_hint"), synthesized_metric)
+        dimension_column = self._dimension_column(working_df, plan.get("query"))
+        metric_column = self._metric_column(working_df, plan.get("metric_hint"), synthesized_metric, plan.get("query"))
 
         if metric_column is None:
             return {
@@ -31,27 +31,72 @@ class DataAgent:
             }
 
         if plan["intent"] == "aggregation":
-            average_value = float(pd.to_numeric(working_df[metric_column], errors="coerce").dropna().mean())
-            result_df = pd.DataFrame([{metric_column: average_value}])
+            op = plan.get("aggregation_op") or "sum"
+            numeric_series = pd.to_numeric(working_df[metric_column], errors="coerce").dropna()
+            table_label = (plan.get("selected_tables") or ["this table"])[0]
+            row_count = len(numeric_series)
+            metric_label = self._readable_metric(metric_column)
+            where_clause = f" in {table_label}" if table_label else ""
+            if op == "mean":
+                value = float(numeric_series.mean())
+                answer = f"Average {metric_label}{where_clause} is {self._format_metric(metric_column, value)} (across {row_count:,} records)."
+                pandas_logic = f"pd.to_numeric(df['{metric_column}'], errors='coerce').mean()"
+                sql_like = f"SELECT AVG({metric_column}) FROM workbook_table;"
+            elif op == "median":
+                value = float(numeric_series.median())
+                answer = f"Median {metric_label}{where_clause} is {self._format_metric(metric_column, value)}."
+                pandas_logic = f"pd.to_numeric(df['{metric_column}'], errors='coerce').median()"
+                sql_like = f"SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY {metric_column}) FROM workbook_table;"
+            elif op == "count":
+                value = float(numeric_series.count())
+                answer = f"{int(value):,} records have {metric_label}{where_clause}."
+                pandas_logic = f"df['{metric_column}'].count()"
+                sql_like = f"SELECT COUNT({metric_column}) FROM workbook_table;"
+            else:
+                value = float(numeric_series.sum())
+                answer = f"Total {metric_label}{where_clause} is {self._format_metric(metric_column, value)} across {row_count:,} records."
+                pandas_logic = f"pd.to_numeric(df['{metric_column}'], errors='coerce').sum()"
+                sql_like = f"SELECT SUM({metric_column}) FROM workbook_table;"
+            result_df = pd.DataFrame([{metric_column: value}])
             return {
                 "status": "success",
-                "answer": f"The average {metric_column} is {average_value:.2f}.",
+                "answer": answer,
                 "dataframe": result_df,
                 "metric_column": metric_column,
                 "dimension_column": dimension_column,
                 "warnings": [],
-                "pandas_logic": f"pd.to_numeric(df['{metric_column}'], errors='coerce').mean()",
-                "sql_like": f"SELECT AVG({metric_column}) FROM workbook_table;",
+                "pandas_logic": pandas_logic,
+                "sql_like": sql_like,
             }
 
         if plan["intent"] == "ranking":
             result_df = self._ranking(working_df, dimension_column, metric_column, plan.get("target_entity"))
-            top_row = result_df.head(1).to_dict(orient="records")
-            top_name = top_row[0].get(dimension_column) if top_row and dimension_column else "The top item"
-            top_value = top_row[0].get(metric_column) if top_row else None
+            top_rows = result_df.head(2).to_dict(orient="records")
+            table_label = (plan.get("selected_tables") or [""])[0]
+            metric_label = self._readable_metric(metric_column)
+            if top_rows and dimension_column:
+                top_name = top_rows[0].get(dimension_column, "The top item")
+                top_value = top_rows[0].get(metric_column)
+                total_series = pd.to_numeric(result_df[metric_column], errors="coerce").dropna()
+                total = float(total_series.sum()) if len(total_series) > 0 else 0.0
+                share = (float(top_value) / total * 100.0) if total and top_value is not None else None
+                runner_up = None
+                if len(top_rows) > 1:
+                    runner_up = f"{top_rows[1].get(dimension_column, '')} is next at {self._format_metric(metric_column, top_rows[1].get(metric_column))}"
+                if share is not None:
+                    noun = "overall" if metric_column.lower() == "total" or metric_label.lower().endswith("total") else metric_label
+                    share_clause = f" — {share:.1f}% of {noun}"
+                else:
+                    share_clause = ""
+                where_clause = f" in {table_label}" if table_label else ""
+                answer = f"{top_name} leads{where_clause} with {metric_label} = {self._format_metric(metric_column, top_value)}{share_clause}."
+                if runner_up:
+                    answer += f" {runner_up}."
+            else:
+                answer = f"The highest {metric_label} is {self._format_metric(metric_column, top_rows[0].get(metric_column) if top_rows else None)}."
             return {
                 "status": "success",
-                "answer": f"{top_name} contributes the most with {metric_column} = {top_value}.",
+                "answer": answer,
                 "dataframe": result_df,
                 "metric_column": metric_column,
                 "dimension_column": dimension_column,
@@ -124,9 +169,21 @@ class DataAgent:
 
         return working, None
 
-    def _dimension_column(self, df: pd.DataFrame) -> str | None:
-        preferred_tokens = ("item", "type", "oem", "source", "month", "line", "dealer", "region", "stream", "category", "product")
+    def _dimension_column(self, df: pd.DataFrame, query: str | None = None) -> str | None:
+        preferred_tokens = ("type", "category", "name", "group", "class", "kind", "status", "segment", "source", "item", "line")
         object_columns = [str(column) for column in df.columns if not pd.api.types.is_numeric_dtype(df[column])]
+
+        if query:
+            query_tokens = {token for token in re.findall(r"[a-z]+", query.lower()) if len(token) >= 3}
+            best_column, best_score = None, 0
+            for column in object_columns:
+                column_tokens = set(re.findall(r"[a-z]+", column.lower()))
+                overlap = len(column_tokens & query_tokens)
+                if overlap > best_score:
+                    best_score = overlap
+                    best_column = column
+            if best_column and best_score >= 1:
+                return best_column
 
         for token in preferred_tokens:
             for column in object_columns:
@@ -142,10 +199,38 @@ class DataAgent:
             return column
         return None
 
-    def _metric_column(self, df: pd.DataFrame, metric_hint: str | None, synthesized_metric: str | None = None) -> str | None:
+    def _metric_column(
+        self,
+        df: pd.DataFrame,
+        metric_hint: str | None,
+        synthesized_metric: str | None = None,
+        query: str | None = None,
+    ) -> str | None:
         numeric_columns = [str(column) for column in df.columns if self._is_business_numeric(df, str(column))]
         if not numeric_columns:
             return None
+
+        if query:
+            query_tokens = [token for token in re.findall(r"[a-z]+", query.lower()) if len(token) >= 3]
+            stopwords = {"the", "for", "and", "from", "what", "which", "how", "show", "give", "most", "least", "top", "sum", "avg", "total", "average", "mean", "count"}
+            meaningful = [token for token in query_tokens if token not in stopwords]
+            best_column, best_score = None, 0
+            for column in numeric_columns:
+                column_tokens = re.findall(r"[a-z]+", column.lower())
+                score = 0
+                for column_token in column_tokens:
+                    for query_token in meaningful:
+                        if column_token == query_token:
+                            score += 4
+                        elif column_token.startswith(query_token) or query_token.startswith(column_token):
+                            if min(len(column_token), len(query_token)) >= 4:
+                                score += 2
+                if score > best_score:
+                    best_score = score
+                    best_column = column
+            if best_column and best_score >= 2:
+                return best_column
+
         if synthesized_metric and synthesized_metric in numeric_columns:
             return synthesized_metric
         if metric_hint:
@@ -165,6 +250,16 @@ class DataAgent:
         if target_entity and dimension_column and target_entity in working[dimension_column].astype(str).tolist():
             return working[[dimension_column, metric_column]].sort_values(metric_column, ascending=True)
         if dimension_column:
+            unique_count = working[dimension_column].nunique(dropna=True)
+            if unique_count > 0 and unique_count < len(working):
+                grouped = (
+                    working.groupby(dimension_column, dropna=False)[metric_column]
+                    .sum()
+                    .reset_index()
+                    .sort_values(metric_column, ascending=False)
+                    .head(10)
+                )
+                return grouped
             return working[[dimension_column, metric_column]].sort_values(metric_column, ascending=False).head(10)
         return working[[metric_column]].sort_values(metric_column, ascending=False).head(10)
 
@@ -194,6 +289,38 @@ class DataAgent:
         if not match:
             return None
         return float(match.group(1)) / 100.0
+
+    def _readable_metric(self, column: str) -> str:
+        label = str(column).strip()
+        label = re.sub(r"\s*\(\$\)\s*$", "", label)
+        label = re.sub(r"\s*\(%\)\s*$", "", label)
+        return label.replace("_", " ")
+
+    def _format_metric(self, column: str, value: Any) -> str:
+        if value is None:
+            return "—"
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        lowered = str(column).lower()
+        is_currency = "$" in str(column) or any(token in lowered for token in ("revenue", "cost", "price", "sales", "income", "gross", "budget", "ytd"))
+        is_percent = "%" in str(column) or any(token in lowered for token in ("rate", "margin", "penetration", "share"))
+        if is_currency:
+            return self._format_currency(number)
+        if is_percent and abs(number) <= 1.5:
+            return f"{number * 100:.1f}%"
+        if number.is_integer() and abs(number) >= 1000:
+            return f"{int(number):,}"
+        return f"{number:,.2f}"
+
+    @staticmethod
+    def _format_currency(value: float) -> str:
+        if abs(value) >= 1_000_000:
+            return f"${value / 1_000_000:,.2f}M"
+        if abs(value) >= 10_000:
+            return f"${value:,.0f}"
+        return f"${value:,.2f}"
 
     def _is_business_numeric(self, df: pd.DataFrame, column: str) -> bool:
         series = df[column]

@@ -29,13 +29,22 @@ class WorkbookLoader:
         path = Path(file_path)
         excel = pd.ExcelFile(path)
         tables: dict[str, pd.DataFrame] = {}
+        sheet_titles: dict[str, list[str]] = {}
 
         for sheet_name in excel.sheet_names:
-            df = pd.read_excel(path, sheet_name=sheet_name)
+            raw = pd.read_excel(path, sheet_name=sheet_name, header=None)
+            header_row, titles = self._detect_header_row(raw)
+            if header_row > 0:
+                df = pd.read_excel(path, sheet_name=sheet_name, header=header_row)
+            else:
+                df = pd.read_excel(path, sheet_name=sheet_name)
             df = self._clean_dataframe(df)
             if not df.empty:
                 tables[sheet_name] = df
+                if titles:
+                    sheet_titles[sheet_name] = titles
 
+        self._sheet_titles = sheet_titles
         manifest = self._build_manifest(path.name, tables)
         semantic_schema = self._build_semantic_schema(path.stem, tables)
         enrichment = self._build_enrichment(tables)
@@ -52,9 +61,65 @@ class WorkbookLoader:
             workbook_purpose=workbook_purpose,
         )
 
+    def _detect_header_row(self, raw: pd.DataFrame) -> tuple[int, list[str]]:
+        """Pick the best header row in the first few rows. Rows above are treated as title/notes."""
+        max_scan = min(6, len(raw))
+        best_idx = 0
+        best_score = -1.0
+
+        for idx in range(max_scan):
+            row = raw.iloc[idx]
+            non_null = row.dropna()
+            if len(non_null) < 2:
+                continue
+            string_cells = sum(
+                1 for value in non_null
+                if isinstance(value, str) and len(str(value).strip()) > 0 and not self._looks_like_number(str(value))
+            )
+            string_ratio = string_cells / len(non_null)
+            if string_ratio < 0.6:
+                continue
+            unique_ratio = len(set(str(value).strip().lower() for value in non_null)) / len(non_null)
+            density = len(non_null) / max(len(row), 1)
+
+            next_row_numeric = 0.0
+            if idx + 1 < len(raw):
+                next_row = raw.iloc[idx + 1].dropna()
+                if len(next_row) > 0:
+                    numeric_count = sum(1 for value in next_row if self._looks_like_number(str(value)))
+                    next_row_numeric = numeric_count / len(next_row)
+
+            score = string_ratio * 2.0 + unique_ratio * 2.0 + density * 1.5 + next_row_numeric * 1.0
+            if score > best_score:
+                best_score = score
+                best_idx = idx
+
+        titles: list[str] = []
+        for i in range(best_idx):
+            row = raw.iloc[i].dropna()
+            if len(row) == 0:
+                continue
+            text = " · ".join(str(value).strip() for value in row if str(value).strip())
+            if text:
+                titles.append(text)
+        return best_idx, titles
+
+    @staticmethod
+    def _looks_like_number(value: str) -> bool:
+        cleaned = value.strip().replace(",", "").replace("$", "").replace("%", "")
+        try:
+            float(cleaned)
+            return True
+        except ValueError:
+            return False
+
     def _clean_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         cleaned = df.copy()
         cleaned = cleaned.dropna(axis=0, how="all").dropna(axis=1, how="all")
+        # Drop any leftover "Unnamed: N" pandas-generated columns
+        drop_columns = [column for column in cleaned.columns if str(column).strip().lower().startswith("unnamed")]
+        if drop_columns:
+            cleaned = cleaned.drop(columns=drop_columns)
         cleaned.columns = [str(column).strip() for column in cleaned.columns]
         return cleaned.reset_index(drop=True)
 
@@ -213,7 +278,7 @@ class WorkbookLoader:
         return ordered[:6]
 
     def _pick_business_metric(self, df: pd.DataFrame) -> str | None:
-        preferred = ("revenue", "sales", "profit", "margin", "gross", "net", "total", "amount", "ebitda", "income")
+        preferred = ("revenue", "sales", "profit", "margin", "gross", "net", "total", "amount", "income", "value", "cost", "price")
         candidates: list[str] = []
         for column in df.columns:
             name = str(column)
@@ -233,7 +298,7 @@ class WorkbookLoader:
         return candidates[0] if candidates else None
 
     def _pick_dimension_with_value(self, df: pd.DataFrame) -> tuple[str | None, str | None]:
-        preferred_tokens = ("stream", "segment", "region", "dealer", "product", "category", "line item", "channel", "type")
+        preferred_tokens = ("type", "category", "group", "segment", "class", "kind", "status", "name", "source", "line item", "channel")
         object_columns = [str(column) for column in df.columns if not pd.api.types.is_numeric_dtype(df[column])]
         ranked: list[str] = []
         for token in preferred_tokens:
@@ -272,11 +337,11 @@ class WorkbookLoader:
 
     def _role(self, column_name: str, series: pd.Series) -> str:
         lowered = column_name.lower()
-        if any(token in lowered for token in ("id", "key")):
+        if any(token in lowered for token in ("id", "key", "#", "number")):
             return "identifier"
         if pd.api.types.is_numeric_dtype(series):
             return "metric"
-        if any(token in lowered for token in ("dealer", "region", "stream", "segment", "category", "name")):
+        if any(token in lowered for token in ("type", "category", "name", "group", "class", "kind", "status", "segment")):
             return "dimension"
         return "attribute"
 
@@ -290,5 +355,79 @@ class WorkbookLoader:
         return None
 
     def _describe_table(self, sheet_name: str, df: pd.DataFrame) -> str:
-        columns = ", ".join(str(column) for column in list(df.columns)[:4])
-        return f"{sheet_name} contains {len(df)} rows and columns such as {columns}."
+        profile = self._table_profile(sheet_name, df)
+        pieces: list[str] = [profile["purpose"]]
+        if profile.get("grain"):
+            pieces.append(f"Grain: {profile['grain']}.")
+        if profile.get("metrics"):
+            top_metrics = ", ".join(profile["metrics"][:4])
+            pieces.append(f"Key metrics: {top_metrics}.")
+        if profile.get("dimensions"):
+            top_dims = ", ".join(profile["dimensions"][:3])
+            pieces.append(f"Dimensions: {top_dims}.")
+        if profile.get("primary_key"):
+            pieces.append(f"Primary key: {profile['primary_key']}.")
+        return " ".join(pieces)
+
+    def _table_profile(self, sheet_name: str, df: pd.DataFrame) -> dict[str, Any]:
+        columns = [str(column) for column in df.columns]
+        lowered_cols = [column.lower() for column in columns]
+        numeric_cols = [column for column in columns if pd.api.types.is_numeric_dtype(df[column])]
+        text_cols = [column for column in columns if not pd.api.types.is_numeric_dtype(df[column])]
+        date_cols = [column for column in columns if pd.api.types.is_datetime64_any_dtype(df[column])]
+
+        metrics = [
+            column for column in numeric_cols
+            if not any(token in column.lower() for token in ("id", "#", "key", "year", "quarter", "month"))
+        ]
+
+        dimensions: list[str] = []
+        for column in text_cols:
+            lowered = column.lower()
+            if any(token in lowered for token in ("type", "name", "category", "group", "class", "kind", "status", "segment", "source")):
+                dimensions.append(column)
+        if not dimensions and text_cols:
+            dimensions = text_cols[:2]
+
+        primary_key = self._primary_key(df)
+
+        entity_label = primary_key.rstrip("#") if primary_key and "#" in primary_key else (primary_key or (dimensions[0] if dimensions else "record"))
+
+        shape = df.shape
+        looks_like_period_grid = (
+            len(text_cols) == 1
+            and len(numeric_cols) >= 3
+            and any(month in " ".join(lowered_cols) for month in ["jan", "feb", "q1", "q2"])
+        )
+        looks_like_parameter_table = (
+            shape[0] <= 30
+            and any("assumption" in column.lower() or "parameter" in column.lower() for column in columns)
+        )
+        looks_like_transaction_log = (
+            shape[0] >= 20
+            and (any("date" in column.lower() for column in columns) or bool(date_cols))
+            and len(numeric_cols) >= 2
+        )
+
+        if looks_like_period_grid:
+            purpose = f"{sheet_name} is a period-over-period financial grid: each row is a {text_cols[0].lower()}, each column is a time bucket or total."
+            grain = f"one row per {text_cols[0].lower()}"
+        elif looks_like_parameter_table:
+            purpose = f"{sheet_name} holds modelling assumptions and parameters used by downstream calculations."
+            grain = "one row per assumption"
+        elif looks_like_transaction_log:
+            purpose = f"{sheet_name} is a transaction-level log with {shape[0]} records. Each row is an individual transaction."
+            grain = f"one row per {entity_label}"
+        else:
+            purpose = f"{sheet_name} is a {shape[0]}-row reference table."
+            grain = f"one row per {entity_label}"
+
+        return {
+            "purpose": purpose,
+            "grain": grain,
+            "metrics": metrics,
+            "dimensions": dimensions,
+            "primary_key": primary_key,
+            "numeric_columns": numeric_cols,
+            "text_columns": text_cols,
+        }

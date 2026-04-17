@@ -301,6 +301,7 @@ async def ask_question(
             supporting_data=result.get("supporting_data", []),
             insight_card=result.get("insight_card"),
             simulation=result.get("simulation"),
+            reasoning=result.get("reasoning"),
             warnings=result.get("warnings", []),
             selected_tables=result.get("selected_tables", []),
             execution_time_ms=result["execution_time_ms"],
