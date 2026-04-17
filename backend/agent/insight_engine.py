@@ -1,4 +1,4 @@
-"""Generic insight engine — peer comparison, period drivers, plan variance."""
+"""Generic insight engine — peer + period + plan analysis with no domain hardcoding."""
 
 from __future__ import annotations
 
@@ -19,6 +19,10 @@ PERIOD_PATTERN = re.compile(
 
 PLAN_TOKENS = ("budget", "plan", "target", "forecast", "expected", "baseline", "goal", "quota")
 TOTAL_TOKENS = ("ytd", "total", "actual", "sum", "overall")
+SUBTOTAL_PATTERN = re.compile(
+    r"\b(total|subtotal|grand|sum|aggregate|overall|all\s)\b",
+    re.IGNORECASE,
+)
 
 
 class InsightEngine:
@@ -86,102 +90,187 @@ class InsightEngine:
     ) -> list[str]:
         bullets: list[str] = []
         metric_label = self._readable_metric(metric_column)
-        average_value = float(working[metric_column].mean())
-        peer_count = int(len(working))
 
-        # 1. Peer comparison + framing pushback
-        gap_pct = ((entity_value - average_value) / average_value * 100.0) if average_value else 0.0
-        asked_under = "underperform" in query or "below" in query or "lag" in query
-        asked_over = "overperform" in query or "above" in query or "beat" in query or "lead" in query
+        # Build the comparable peer set:
+        #   1) drop subtotal-like rows
+        #   2) keep rows in the same order of magnitude as the target (0.2x .. 5x)
+        peers = self._comparable_peers(working, metric_column, dimension_column, target_entity, entity_value)
+        peer_count = int(len(peers))
 
-        if asked_under and gap_pct >= 0:
-            bullets.append(
-                f"{target_entity} is actually {abs(gap_pct):.0f}% above the peer average on {metric_label} "
-                f"({self._fmt(metric_column, entity_value)} vs {self._fmt(metric_column, average_value)} average across {peer_count}). "
-                f"By this metric it is not underperforming."
-            )
-        elif asked_over and gap_pct < 0:
-            bullets.append(
-                f"{target_entity} is actually {abs(gap_pct):.0f}% below the peer average on {metric_label} "
-                f"({self._fmt(metric_column, entity_value)} vs {self._fmt(metric_column, average_value)} average). "
-                f"By this metric it is not overperforming."
-            )
-        else:
-            verb = "beats" if gap_pct > 0 else "trails"
-            bullets.append(
-                f"{target_entity} {verb} the peer average by {abs(gap_pct):.0f}% — "
-                f"{self._fmt(metric_column, entity_value)} vs {self._fmt(metric_column, average_value)} across {peer_count} entries."
-            )
-
-        # 2. Ranking position
-        rank_df = working.sort_values(metric_column, ascending=False).reset_index(drop=True)
-        rank_position: int | None = None
-        for index, row in rank_df.iterrows():
-            if str(row[dimension_column]).strip().lower() == target_entity.strip().lower():
-                rank_position = int(index) + 1
-                break
+        # 1. Headline: absolute value + ranking position within comparable peers
+        rank_position = self._rank_within(peers, metric_column, dimension_column, target_entity)
         if rank_position == 1 and peer_count > 1:
-            second = rank_df.iloc[1]
+            second_row = peers.sort_values(metric_column, ascending=False).iloc[1]
             bullets.append(
-                f"It ranks #1 of {peer_count}, ahead of {second[dimension_column]} "
-                f"({self._fmt(metric_column, second[metric_column])})."
+                f"{target_entity} contributed {self._fmt(metric_column, entity_value)} on {metric_label} — "
+                f"the largest of {peer_count} comparable items, ahead of {second_row[dimension_column]} "
+                f"({self._fmt(metric_column, second_row[metric_column])})."
             )
-        elif rank_position and rank_position > 1:
-            leader = rank_df.iloc[0]
+        elif rank_position and peer_count > 1:
+            sorted_peers = peers.sort_values(metric_column, ascending=False).reset_index(drop=True)
+            leader = sorted_peers.iloc[0]
             bullets.append(
-                f"It ranks #{rank_position} of {peer_count}, behind {leader[dimension_column]} "
+                f"{target_entity} contributed {self._fmt(metric_column, entity_value)} on {metric_label} — "
+                f"ranked #{rank_position} of {peer_count} comparable items, behind {leader[dimension_column]} "
                 f"({self._fmt(metric_column, leader[metric_column])})."
             )
+        else:
+            bullets.append(
+                f"{target_entity} contributed {self._fmt(metric_column, entity_value)} on {metric_label}."
+            )
 
-        # 3. Period-level driver (only when raw_df has period columns)
-        if raw_df is not None and dimension_column in raw_df.columns:
-            period_bullet = self._period_driver(raw_df, dimension_column, target_entity, metric_column)
-            if period_bullet:
-                bullets.append(period_bullet)
+        # 2. Peer-average gap + framing pushback
+        if peer_count > 1:
+            average_value = float(peers[metric_column].mean())
+            gap_pct = ((entity_value - average_value) / average_value * 100.0) if average_value else 0.0
+            asked_under = "underperform" in query or "below" in query or "lag" in query
+            asked_over = "overperform" in query or "above" in query or "beat" in query
 
-        # 4. Plan/Budget comparison
-        if raw_df is not None and dimension_column in raw_df.columns:
-            plan_bullet = self._plan_variance(raw_df, dimension_column, target_entity, metric_column, entity_value)
-            if plan_bullet:
-                bullets.append(plan_bullet)
+            if asked_under and gap_pct >= 0:
+                bullets.append(
+                    f"It is {abs(gap_pct):.0f}% above the average of comparable items "
+                    f"({self._fmt(metric_column, average_value)}) — by this metric it is not underperforming."
+                )
+            elif asked_over and gap_pct < 0:
+                bullets.append(
+                    f"It is {abs(gap_pct):.0f}% below the average of comparable items "
+                    f"({self._fmt(metric_column, average_value)}) — by this metric it is not overperforming."
+                )
+            else:
+                verb = "above" if gap_pct >= 0 else "below"
+                bullets.append(
+                    f"That is {abs(gap_pct):.0f}% {verb} the comparable peer average of "
+                    f"{self._fmt(metric_column, average_value)}."
+                )
+
+        # 3. Period consistency + trend analysis (very explanatory)
+        period_bullet = self._period_analysis(raw_df, dimension_column, target_entity, metric_column)
+        if period_bullet:
+            bullets.append(period_bullet)
+
+        # 4. Plan / budget variance (only if a matching plan column exists)
+        plan_bullet = self._plan_variance(raw_df, dimension_column, target_entity, metric_column, entity_value)
+        if plan_bullet:
+            bullets.append(plan_bullet)
 
         return bullets
 
-    def _period_driver(
+    # -------------------- comparable-peer logic --------------------
+
+    def _comparable_peers(
         self,
-        raw_df: pd.DataFrame,
+        working: pd.DataFrame,
+        metric_column: str,
+        dimension_column: str,
+        target_entity: str,
+        entity_value: float,
+    ) -> pd.DataFrame:
+        if dimension_column not in working.columns:
+            return working
+        peers = working.copy()
+        peers = peers[~peers[dimension_column].astype(str).str.contains(SUBTOTAL_PATTERN, regex=True, na=False)]
+        if entity_value > 0:
+            lower = entity_value * 0.2
+            upper = entity_value * 5.0
+            magnitude_peers = peers[(peers[metric_column] >= lower) & (peers[metric_column] <= upper)]
+            if len(magnitude_peers) >= 2:
+                peers = magnitude_peers
+        if peers.empty:
+            return working
+        return peers.reset_index(drop=True)
+
+    def _rank_within(
+        self,
+        peers: pd.DataFrame,
+        metric_column: str,
+        dimension_column: str,
+        target_entity: str,
+    ) -> int | None:
+        ranked = peers.sort_values(metric_column, ascending=False).reset_index(drop=True)
+        for idx, row in ranked.iterrows():
+            if str(row[dimension_column]).strip().lower() == target_entity.strip().lower():
+                return int(idx) + 1
+        return None
+
+    # -------------------- period analysis --------------------
+
+    def _period_analysis(
+        self,
+        raw_df: pd.DataFrame | None,
         dimension_column: str,
         target_entity: str,
         metric_column: str,
     ) -> str | None:
-        period_cols = [c for c in raw_df.columns if PERIOD_PATTERN.match(str(c).strip())]
-        if len(period_cols) < 3:
+        if raw_df is None or dimension_column not in raw_df.columns:
             return None
+
+        period_cols = [c for c in raw_df.columns if PERIOD_PATTERN.match(str(c).strip())]
+        if len(period_cols) < 4:
+            return None
+
         mask = raw_df[dimension_column].astype(str).str.lower() == target_entity.lower()
         target_rows = raw_df[mask]
         if target_rows.empty:
             return None
-        period_values: list[tuple[str, float]] = []
-        for col in period_cols:
-            value = pd.to_numeric(target_rows.iloc[0][col], errors="coerce")
+
+        values: list[tuple[str, float]] = []
+        for column in period_cols:
+            value = pd.to_numeric(target_rows.iloc[0][column], errors="coerce")
             if pd.notna(value):
-                period_values.append((str(col), float(value)))
-        if len(period_values) < 3:
+                values.append((str(column), float(value)))
+        if len(values) < 4:
             return None
-        period_values.sort(key=lambda item: item[1], reverse=True)
-        top = period_values[:2]
-        bottom = period_values[-1]
-        top_str = ", ".join(f"{name} ({self._fmt(metric_column, value)})" for name, value in top)
-        return f"Strongest periods were {top_str}. Weakest was {bottom[0]} ({self._fmt(metric_column, bottom[1])})."
+
+        numbers = [value for _, value in values]
+        mean_value = sum(numbers) / len(numbers)
+        if mean_value == 0:
+            return None
+
+        max_value = max(numbers)
+        min_value = min(numbers)
+        spread_pct = (max_value - min_value) / abs(mean_value) * 100.0
+
+        if spread_pct < 25:
+            consistency = "very consistent"
+        elif spread_pct < 60:
+            consistency = "moderately variable"
+        else:
+            consistency = "highly variable"
+
+        sorted_values = sorted(values, key=lambda item: item[1], reverse=True)
+        best = sorted_values[0]
+        worst = sorted_values[-1]
+
+        half = len(values) // 2
+        first_avg = sum(numbers[:half]) / half if half else mean_value
+        second_count = len(numbers) - half
+        second_avg = sum(numbers[half:]) / second_count if second_count else mean_value
+        if first_avg > 0 and second_avg > first_avg * 1.05:
+            trend = f"trending up — second half averaged {self._fmt(metric_column, second_avg)} vs first half {self._fmt(metric_column, first_avg)} (+{(second_avg / first_avg - 1) * 100:.0f}%)"
+        elif second_avg > 0 and first_avg > second_avg * 1.05:
+            trend = f"trending down — second half averaged {self._fmt(metric_column, second_avg)} vs first half {self._fmt(metric_column, first_avg)} (−{(1 - second_avg / first_avg) * 100:.0f}%)"
+        else:
+            trend = f"flat across the year (each half averaged ~{self._fmt(metric_column, mean_value)})"
+
+        return (
+            f"Across {len(values)} periods it was {consistency}: "
+            f"best period {best[0]} at {self._fmt(metric_column, best[1])}, "
+            f"weakest {worst[0]} at {self._fmt(metric_column, worst[1])}, {trend}."
+        )
+
+    # -------------------- plan / budget variance --------------------
 
     def _plan_variance(
         self,
-        raw_df: pd.DataFrame,
+        raw_df: pd.DataFrame | None,
         dimension_column: str,
         target_entity: str,
         metric_column: str,
         entity_value: float,
     ) -> str | None:
+        if raw_df is None or dimension_column not in raw_df.columns:
+            return None
+
         metric_tokens = set(re.findall(r"[a-z]+", metric_column.lower())) - set(PLAN_TOKENS) - set(TOTAL_TOKENS)
 
         plan_cols: list[str] = []
@@ -192,7 +281,6 @@ class InsightEngine:
             if not pd.api.types.is_numeric_dtype(raw_df[column]):
                 continue
             column_tokens = set(re.findall(r"[a-z]+", column_lower)) - set(PLAN_TOKENS)
-            # Require overlap with the metric (or the plan column has no other tokens)
             if metric_tokens and column_tokens and not (metric_tokens & column_tokens):
                 continue
             plan_cols.append(str(column))
