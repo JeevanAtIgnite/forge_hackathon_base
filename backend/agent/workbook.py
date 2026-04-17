@@ -197,7 +197,7 @@ class WorkbookLoader:
             numeric_columns = [column for column in df.columns if pd.api.types.is_numeric_dtype(df[column])]
 
             for column in object_columns[:4]:
-                if any(token in str(column).lower() for token in ("dealer", "region", "stream", "product", "category", "segment")):
+                if any(token in str(column).lower() for token in ("type", "category", "name", "group", "class", "kind", "status", "segment", "source")):
                     all_entities.add(str(column))
 
             for column in numeric_columns[:6]:
@@ -238,11 +238,7 @@ class WorkbookLoader:
                 {"table_name": sheet_name, "columns": [str(column) for column in df.columns], "row_count": int(len(df))}
                 for sheet_name, df in tables.items()
             ],
-            "demo_scenarios": [
-                "Which revenue stream contributes the most?",
-                "Why is Used Vehicle Sales underperforming?",
-                "What if Used Vehicle Sales increase by 15%?",
-            ],
+            "demo_scenarios": self._suggest_questions(tables)[:3],
         }
 
     def _suggest_questions(self, tables: dict[str, pd.DataFrame]) -> list[str]:
@@ -287,7 +283,7 @@ class WorkbookLoader:
                 continue
             if any(token in lowered for token in ("date", "year", "quarter", "month")):
                 continue
-            if "#" in lowered or lowered.endswith("id") or "vin" in lowered:
+            if "#" in lowered or lowered.endswith("id") or lowered.endswith("uuid") or lowered.endswith("guid") or lowered.endswith("ref"):
                 continue
             if pd.to_numeric(df[column], errors="coerce").notna().mean() > 0.5:
                 candidates.append(name)

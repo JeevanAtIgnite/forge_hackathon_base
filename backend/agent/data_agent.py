@@ -15,7 +15,7 @@ class DataAgent:
         selected_tables = plan.get("selected_tables", [])
         working_df = self._working_dataframe(selected_tables, tables)
         working_df, synthesized_metric = self._prepare_dataframe(working_df)
-        dimension_column = self._dimension_column(working_df, plan.get("query"))
+        dimension_column = self._dimension_column(working_df, plan.get("query"), plan.get("target_entity"))
         metric_column = self._metric_column(working_df, plan.get("metric_hint"), synthesized_metric, plan.get("query"))
 
         if metric_column is None:
@@ -111,6 +111,7 @@ class DataAgent:
                 "status": "success",
                 "answer": "",
                 "dataframe": result_df,
+                "raw_dataframe": working_df,
                 "metric_column": metric_column,
                 "dimension_column": dimension_column,
                 "target_entity": plan.get("target_entity"),
@@ -169,9 +170,21 @@ class DataAgent:
 
         return working, None
 
-    def _dimension_column(self, df: pd.DataFrame, query: str | None = None) -> str | None:
+    def _dimension_column(
+        self,
+        df: pd.DataFrame,
+        query: str | None = None,
+        target_entity: str | None = None,
+    ) -> str | None:
         preferred_tokens = ("type", "category", "name", "group", "class", "kind", "status", "segment", "source", "item", "line")
         object_columns = [str(column) for column in df.columns if not pd.api.types.is_numeric_dtype(df[column])]
+
+        if target_entity:
+            target_lower = target_entity.strip().lower()
+            for column in object_columns:
+                values = df[column].dropna().astype(str).str.strip().str.lower().tolist()
+                if target_lower in values:
+                    return column
 
         if query:
             query_tokens = {token for token in re.findall(r"[a-z]+", query.lower()) if len(token) >= 3}
@@ -329,6 +342,6 @@ class DataAgent:
             return False
         if any(token in lowered for token in ("date", "year", "quarter")):
             return False
-        if "#" in lowered or lowered.endswith("id") or "vin" in lowered:
+        if "#" in lowered or lowered.endswith("id") or lowered.endswith("uuid") or lowered.endswith("guid") or lowered.endswith("ref"):
             return False
         return pd.to_numeric(series, errors="coerce").notna().mean() > 0.2

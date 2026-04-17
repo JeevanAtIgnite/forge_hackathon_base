@@ -15,7 +15,6 @@ import {
   getConversation,
   getExcelSchema,
   getSchemaInfo,
-  getSuggestedQuestions,
   getUsageSummary,
   listConversations,
   processDataSource,
@@ -32,16 +31,6 @@ type ChatEntry =
   | { type: 'user'; content: string }
   | { type: 'assistant'; content: string; result?: AskQuestionResponse; error?: string | null };
 
-type CapabilityMode = 'query' | 'diagnostic' | 'simulation' | 'monitoring';
-
-const CAPABILITY_MODES: { id: CapabilityMode; label: string; tagline: string; available: boolean }[] = [
-  { id: 'query', label: 'Query', tagline: 'Answer novel questions', available: true },
-  { id: 'diagnostic', label: 'Diagnostic', tagline: 'Explain the variance', available: true },
-  { id: 'simulation', label: 'Simulation', tagline: 'Stress-test before committing', available: true },
-  { id: 'monitoring', label: 'Monitoring', tagline: 'Catch issues before reports', available: false },
-];
-
-
 const REASONING_STAGES: { agent: string; message: string }[] = [
   { agent: 'Planner', message: 'Decomposing the query · identifying tables and required joins.' },
   { agent: 'Data Agent', message: 'Executing pandas operations on the live workbook.' },
@@ -49,29 +38,6 @@ const REASONING_STAGES: { agent: string; message: string }[] = [
   { agent: 'Simulation', message: 'Recomputing the model under counterfactual parameters.' },
   { agent: 'Validator', message: 'Cross-checking every output. Refusing what cannot be defended.' },
 ];
-
-const MODE_FALLBACK_PROMPTS: Record<CapabilityMode, string[]> = {
-  query: [
-    'Which revenue stream contributes the most?',
-    'Show total revenue by line item.',
-    'List the top 10 records by value.',
-  ],
-  diagnostic: [
-    'Why is Used Vehicle Sales underperforming?',
-    'Which segments are driving the variance?',
-    'What changed most versus average?',
-  ],
-  simulation: [
-    'What if Used Vehicle Sales increase by 15%?',
-    'What if margins improve by 5%?',
-    'What if volume drops by 10%?',
-  ],
-  monitoring: [
-    'Which metrics are drifting this week?',
-    'Has any column changed type or scale?',
-    'Recommend KPIs from current usage.',
-  ],
-};
 
 interface TableView {
   name: string;
@@ -143,38 +109,6 @@ function inferRelationships(tables: TableView[]): RelationshipView[] {
   }
 
   return relationships.slice(0, 8);
-}
-
-function ModeTabs({
-  active,
-  onChange,
-}: {
-  active: CapabilityMode;
-  onChange: (mode: CapabilityMode) => void;
-}) {
-  return (
-    <div className="flex flex-wrap items-center gap-1">
-      {CAPABILITY_MODES.map((mode) => {
-        const isActive = mode.id === active;
-        return (
-          <button
-            key={mode.id}
-            onClick={() => mode.available && onChange(mode.id)}
-            disabled={!mode.available}
-            title={mode.tagline}
-            className={`rounded-md px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] transition ${
-              isActive
-                ? 'bg-[#8243EA]/15 text-[#d8c9ff] shadow-[inset_0_0_0_1px_rgba(130,67,234,0.4)]'
-                : 'text-gray-500 hover:text-gray-200'
-            } ${!mode.available ? 'cursor-not-allowed opacity-40' : ''}`}
-          >
-            {mode.label}
-            {!mode.available && <span className="ml-1.5 text-[9px] text-gray-600">soon</span>}
-          </button>
-        );
-      })}
-    </div>
-  );
 }
 
 function ChatCanvas({
@@ -479,7 +413,7 @@ function ReasoningModal({
   question: string;
   onClose: () => void;
 }) {
-  const [activeTab, setActiveTab] = useState<'narrative' | 'timeline' | 'rows' | 'code'>('narrative');
+  const [activeTab, setActiveTab] = useState<'narrative' | 'rows' | 'code'>('narrative');
   const firedIds = new Set<string>();
   for (const log of result.agent_logs) {
     const id = classifyAgentNode(log.agent);
@@ -543,7 +477,7 @@ function ReasoningModal({
         </div>
 
         <div className="relative flex flex-none items-center gap-1 border-b border-[#e3e5ee] bg-white/60 px-4 py-2">
-          {(['narrative', 'timeline', 'rows', 'code'] as const).map((tab) => (
+          {(['narrative', 'rows', 'code'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -554,7 +488,6 @@ function ReasoningModal({
               }`}
             >
               {tab === 'narrative' ? 'How it works' :
-               tab === 'timeline' ? 'Agent timeline' :
                tab === 'rows' ? `Source rows · ${result.supporting_data.length}` :
                'Executed code'}
             </button>
@@ -580,22 +513,6 @@ function ReasoningModal({
                 ))}
               </ol>
             )
-          )}
-
-          {activeTab === 'timeline' && (
-            <ol className="space-y-3">
-              {result.agent_logs.map((log, index) => (
-                <li key={`${log.agent}-${index}`} className="flex gap-3">
-                  <span className="mt-0.5 inline-flex h-6 w-6 flex-none items-center justify-center rounded-md bg-emerald-500 text-[10px] font-bold text-white">
-                    ✓
-                  </span>
-                  <div>
-                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[#5b21b6]">{log.agent}</p>
-                    <p className="text-[13px] leading-snug text-[#3d3f55]">{log.message}</p>
-                  </div>
-                </li>
-              ))}
-            </ol>
           )}
 
           {activeTab === 'rows' && <LightTable rows={result.supporting_data} />}
@@ -904,7 +821,6 @@ export default function Dashboard() {
   const [selectedDataSourceId, setSelectedDataSourceId] = useState<string | null>(null);
   const [schemaInfo, setSchemaInfo] = useState<SchemaInfoResponse | null>(null);
   const [workbookSchema, setWorkbookSchema] = useState<ExcelSchemaResponse | null>(null);
-  const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
   const [question, setQuestion] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [isAskingQuestion, setIsAskingQuestion] = useState(false);
@@ -921,7 +837,6 @@ export default function Dashboard() {
   const [conversationsTotal, setConversationsTotal] = useState(0);
   const [isConversationsLoading, setIsConversationsLoading] = useState(false);
   const [usageSummary, setUsageSummary] = useState<UsageSummaryResponse | null>(null);
-  const [capabilityMode, setCapabilityMode] = useState<CapabilityMode>('query');
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
   const [reasoningProgress, setReasoningProgress] = useState(0);
   const [pendingAssistantEntry, setPendingAssistantEntry] = useState<Extract<ChatEntry, { type: 'assistant' }> | null>(null);
@@ -944,19 +859,6 @@ export default function Dashboard() {
     [dataSources, selectedDataSourceId]
   );
 
-  const modePrompts = useMemo(() => {
-    const fallback = MODE_FALLBACK_PROMPTS[capabilityMode];
-    if (capabilityMode === 'monitoring') return fallback;
-    if (suggestedQuestions.length === 0) return fallback;
-
-    const filtered = suggestedQuestions.filter((prompt) => {
-      const lowered = prompt.toLowerCase();
-      if (capabilityMode === 'simulation') return lowered.startsWith('what if');
-      if (capabilityMode === 'diagnostic') return lowered.startsWith('why') || lowered.includes('underperform') || lowered.includes('driving') || lowered.includes('variance');
-      return !lowered.startsWith('what if') && !lowered.startsWith('why');
-    });
-    return filtered.length > 0 ? filtered.slice(0, 4) : fallback;
-  }, [capabilityMode, suggestedQuestions]);
 
   const withAuthRetry = async <T,>(requestFn: (token: string) => Promise<T>): Promise<T> => {
     const currentAccessToken = tokens?.access_token;
@@ -1008,11 +910,9 @@ export default function Dashboard() {
     setSelectedDataSourceId(dataSourceId);
     setSchemaInfo(null);
     setWorkbookSchema(null);
-    setSuggestedQuestions([]);
     setChatHistory([]);
     setCurrentConversationId(null);
     setAskError(null);
-    setCapabilityMode('query');
   };
 
   const fetchDataSources = async () => {
@@ -1060,17 +960,12 @@ export default function Dashboard() {
       setSchemaInfo(info);
 
       if (info.is_ready_for_queries) {
-        const [schema, suggestions] = await Promise.all([
-          withAuthRetry((token) => getExcelSchema(token, dataSourceId)),
-          withAuthRetry((token) => getSuggestedQuestions(token, dataSourceId)),
-        ]);
+        const schema = await withAuthRetry((token) => getExcelSchema(token, dataSourceId));
         setWorkbookSchema(schema);
-        setSuggestedQuestions(suggestions.questions);
       }
     } catch {
       setSchemaInfo(null);
       setWorkbookSchema(null);
-      setSuggestedQuestions([]);
     }
   };
 
@@ -1153,18 +1048,10 @@ export default function Dashboard() {
     }
   };
 
-  const decoratePromptForMode = (prompt: string): string => {
-    const trimmed = prompt.trim();
-    const lowered = trimmed.toLowerCase();
-    if (capabilityMode === 'simulation' && !lowered.startsWith('what if')) return `What if ${trimmed.replace(/[?.!]+$/, '')}?`;
-    if (capabilityMode === 'diagnostic' && !lowered.startsWith('why') && !lowered.includes('underperform')) return `Why ${trimmed.replace(/[?.!]+$/, '').replace(/^(what|how|which|show)\s+/i, '')}?`;
-    return trimmed;
-  };
-
   const handleAskQuestion = async (providedQuestion?: string) => {
     const baseQuestion = providedQuestion ?? question;
     if (!baseQuestion.trim() || !selectedDataSourceId || !accessToken) return;
-    const nextQuestion = decoratePromptForMode(baseQuestion);
+    const nextQuestion = baseQuestion.trim();
 
     setIsAskingQuestion(true);
     setAnimationDone(false);
@@ -1284,11 +1171,7 @@ export default function Dashboard() {
       ? 'Select a workbook to begin…'
       : !workbookReady
         ? 'Prepare the workbook to enable execution…'
-        : capabilityMode === 'simulation'
-          ? 'Describe a scenario, e.g. "Used Vehicle Sales increase by 15%"'
-          : capabilityMode === 'diagnostic'
-            ? 'Ask why a metric moved, e.g. "Why is Q3 margin off plan?"'
-            : 'Ask a question about your data…';
+        : 'Ask a question about your data…';
 
     const statusLabel = workbookReady ? 'Ready' : isProcessing ? 'Preparing…' : selectedSource ? 'Needs prep' : 'No workbook';
     const statusTone = workbookReady ? 'text-emerald-300' : 'text-amber-300';
@@ -1303,21 +1186,6 @@ export default function Dashboard() {
         <p className="mt-3 max-w-lg text-sm text-gray-400">
           Every result comes paired with the executed code, the source rows, and a validator trace — inline.
         </p>
-        {workbookReady && modePrompts.length > 0 && (
-          <div className="mt-8 grid w-full max-w-2xl gap-2 sm:grid-cols-2">
-            {modePrompts.slice(0, 4).map((prompt) => (
-              <button
-                key={prompt}
-                onClick={() => void handleAskQuestion(prompt)}
-                disabled={isAskingQuestion}
-                className="group rounded-xl border border-white/8 bg-[#0d0e18] px-4 py-3 text-left text-sm text-gray-300 transition hover:border-[#8243EA]/40 hover:bg-[#11121d] hover:text-white disabled:opacity-50"
-              >
-                <span className="block text-[10px] uppercase tracking-[0.18em] text-gray-500 group-hover:text-[#bca7ff]">Try</span>
-                <span className="mt-1 block leading-snug">{prompt}</span>
-              </button>
-            ))}
-          </div>
-        )}
       </div>
     );
 
@@ -1405,41 +1273,26 @@ export default function Dashboard() {
         )}
 
         <div className="relative flex flex-1 min-h-0 flex-col overflow-hidden">
-          {capabilityMode === 'monitoring' ? (
-            <div className="flex flex-1 items-center justify-center px-6">
-              <div className="max-w-md rounded-2xl border border-dashed border-white/10 bg-[#0d0e18] p-8 text-center">
-                <p className="text-[10px] uppercase tracking-[0.32em] text-[#8b8da3] font-semibold">Roadmap · 2027</p>
-                <h3 className="mt-3 text-xl font-semibold text-white">Continuous monitoring & alerting</h3>
-                <p className="mt-2 text-sm text-gray-400">
-                  Schema-drift detection, KPI recommendations, and scheduled executive briefings — shipping next on the enterprise data fabric.
-                </p>
-              </div>
-            </div>
-          ) : (
-            <ChatCanvas
-              entries={chatHistory}
-              scrollRef={conversationScrollRef}
-              emptyState={emptyState}
-              isAsking={isAskingQuestion}
-              onViewReasoning={(result) => setReasoningModal(result)}
-              theater={
-                isAskingQuestion ? (
-                  <ReasoningTheater
-                    progress={reasoningProgress}
-                    pendingResult={pendingAssistantEntry?.result}
-                    question={[...chatHistory].reverse().find((entry) => entry.type === 'user')?.content || ''}
-                  />
-                ) : null
-              }
-            />
-          )}
+          <ChatCanvas
+            entries={chatHistory}
+            scrollRef={conversationScrollRef}
+            emptyState={emptyState}
+            isAsking={isAskingQuestion}
+            onViewReasoning={(result) => setReasoningModal(result)}
+            theater={
+              isAskingQuestion ? (
+                <ReasoningTheater
+                  progress={reasoningProgress}
+                  pendingResult={pendingAssistantEntry?.result}
+                  question={[...chatHistory].reverse().find((entry) => entry.type === 'user')?.content || ''}
+                />
+              ) : null
+            }
+          />
 
           <div className="border-t border-white/8 bg-[#08090f]/85 px-6 py-3 backdrop-blur">
             <div className="mx-auto w-full max-w-4xl">
               <div className="rounded-2xl border border-white/10 bg-[#0d0e18] focus-within:border-[#8243EA]/40">
-                <div className="flex items-center justify-between border-b border-white/8 px-3 pt-2 pb-1.5">
-                  <ModeTabs active={capabilityMode} onChange={setCapabilityMode} />
-                </div>
                 <textarea
                   value={question}
                   onChange={(event) => setQuestion(event.target.value)}
@@ -1454,19 +1307,7 @@ export default function Dashboard() {
                   rows={1}
                   className="block w-full resize-none bg-transparent px-4 pt-3 text-[15px] leading-6 text-white outline-none placeholder:text-gray-500"
                 />
-                <div className="flex flex-wrap items-center justify-between gap-2 px-3 pb-2.5 pt-1">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {modePrompts.slice(0, 3).map((prompt) => (
-                      <button
-                        key={prompt}
-                        onClick={() => void handleAskQuestion(prompt)}
-                        disabled={composerDisabled}
-                        className="max-w-[260px] truncate rounded-md border border-white/8 bg-white/[0.02] px-2 py-1 text-[11px] text-gray-400 hover:border-[#8243EA]/30 hover:text-white disabled:opacity-50"
-                      >
-                        {prompt}
-                      </button>
-                    ))}
-                  </div>
+                <div className="flex items-center justify-end gap-2 px-3 pb-2.5 pt-1">
                   <button
                     onClick={() => void handleAskQuestion()}
                     disabled={!question.trim() || composerDisabled}
@@ -1653,7 +1494,7 @@ export default function Dashboard() {
                   value={dataSourceName}
                   onChange={(event) => setDataSourceName(event.target.value)}
                   className="mt-2 w-full px-4 py-3 bg-[#11121d] border border-white/8 rounded-xl text-white"
-                  placeholder="Dealership Sales Model"
+                  placeholder="My workbook"
                 />
               </label>
               <label className="block">
