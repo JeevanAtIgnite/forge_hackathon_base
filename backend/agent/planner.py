@@ -58,7 +58,18 @@ class Planner:
             "target_entity": self._target_entity(query, tables, selected_tables),
             "metric_hint": self._metric_hint(normalized),
             "aggregation_op": self._aggregation_op(normalized) if intent == "aggregation" else None,
+            "ranking_direction": self._ranking_direction(normalized),
         }
+
+    def _ranking_direction(self, normalized: str) -> str:
+        bottom_terms = (
+            "least", "lowest", "smallest", "worst", "bottom",
+            "doing bad", "doing badly", "doing poorly",
+            "performing bad", "performing badly", "performing poorly",
+        )
+        if any(term in normalized for term in bottom_terms):
+            return "asc"
+        return "desc"
 
     def _intent(self, normalized: str) -> str:
         if "what if" in normalized:
@@ -71,9 +82,16 @@ class Planner:
             return "aggregation"
         if any(token in normalized for token in ("count", "how many")):
             return "aggregation"
-        if any(token in normalized for token in ("top", "most", "highest", "largest", "biggest", "leading")):
+        if any(token in normalized for token in ("top", "most", "highest", "largest", "biggest", "leading", "best")):
             return "ranking"
         if any(token in normalized for token in ("least", "lowest", "smallest", "worst", "bottom")):
+            return "ranking"
+        if any(phrase in normalized for phrase in (
+            "doing well", "doing good", "doing great",
+            "doing bad", "doing badly", "doing poorly",
+            "performing well", "performing good", "performing great",
+            "performing bad", "performing badly", "performing poorly",
+        )):
             return "ranking"
         return "lookup"
 

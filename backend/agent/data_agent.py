@@ -70,7 +70,8 @@ class DataAgent:
             }
 
         if plan["intent"] == "ranking":
-            result_df = self._ranking(working_df, dimension_column, metric_column, plan.get("target_entity"))
+            direction = plan.get("ranking_direction") or "desc"
+            result_df = self._ranking(working_df, dimension_column, metric_column, direction=direction)
             top_rows = result_df.head(2).to_dict(orient="records")
             table_label = (plan.get("selected_tables") or [""])[0]
             metric_label = self._readable_metric(metric_column)
@@ -89,11 +90,13 @@ class DataAgent:
                 else:
                     share_clause = ""
                 where_clause = f" in {table_label}" if table_label else ""
-                answer = f"{top_name} leads{where_clause} with {metric_label} = {self._format_metric(metric_column, top_value)}{share_clause}."
+                verb = "ranks lowest" if direction == "asc" else "leads"
+                answer = f"{top_name} {verb}{where_clause} with {metric_label} = {self._format_metric(metric_column, top_value)}{share_clause}."
                 if runner_up:
                     answer += f" {runner_up}."
             else:
-                answer = f"The highest {metric_label} is {self._format_metric(metric_column, top_rows[0].get(metric_column) if top_rows else None)}."
+                qualifier = "lowest" if direction == "asc" else "highest"
+                answer = f"The {qualifier} {metric_label} is {self._format_metric(metric_column, top_rows[0].get(metric_column) if top_rows else None)}."
             return {
                 "status": "success",
                 "answer": answer,
@@ -134,16 +137,45 @@ class DataAgent:
                 "sql_like": f"UPDATE workbook_table SET {metric_column} = {metric_column} * scenario_multiplier WHERE {dimension_column} = target_entity;",
             }
 
-        preview = working_df.head(10)
+        # Generic lookup fallback — if a dimension and metric exist, surface a ranking instead of a flat preview
+        table_label = (plan.get("selected_tables") or [""])[0]
+        metric_label = self._readable_metric(metric_column)
+        if dimension_column:
+            ranked = self._ranking(working_df, dimension_column, metric_column, target_entity=None, direction="desc")
+            top_rows = ranked.head(2).to_dict(orient="records")
+            if top_rows:
+                top_name = top_rows[0].get(dimension_column)
+                top_value = top_rows[0].get(metric_column)
+                runner = ""
+                if len(top_rows) > 1:
+                    runner = f" {top_rows[1].get(dimension_column)} is next at {self._format_metric(metric_column, top_rows[1].get(metric_column))}."
+                where_clause = f" in {table_label}" if table_label else ""
+                answer = f"{top_name} leads{where_clause} on {metric_label} with {self._format_metric(metric_column, top_value)}.{runner}"
+                return {
+                    "status": "success",
+                    "answer": answer,
+                    "dataframe": ranked,
+                    "metric_column": metric_column,
+                    "dimension_column": dimension_column,
+                    "warnings": [],
+                    "pandas_logic": f"df.groupby('{dimension_column}')['{metric_column}'].sum().sort_values(ascending=False).head(10)",
+                    "sql_like": f"SELECT {dimension_column}, SUM({metric_column}) AS total FROM workbook_table GROUP BY {dimension_column} ORDER BY total DESC LIMIT 10;",
+                }
+
+        # Last resort — describe the table
+        numeric_series = pd.to_numeric(working_df[metric_column], errors="coerce").dropna()
+        total_value = float(numeric_series.sum()) if not numeric_series.empty else 0.0
+        row_count = len(working_df)
+        where_clause = f" in {table_label}" if table_label else ""
         return {
             "status": "success",
-            "answer": "I loaded the relevant workbook data and returned the first matching records.",
-            "dataframe": preview,
+            "answer": f"{metric_label}{where_clause} totals {self._format_metric(metric_column, total_value)} across {row_count:,} records.",
+            "dataframe": working_df.head(10),
             "metric_column": metric_column,
             "dimension_column": dimension_column,
             "warnings": [],
-            "pandas_logic": "df.head(10)",
-            "sql_like": "SELECT * FROM workbook_table LIMIT 10;",
+            "pandas_logic": f"pd.to_numeric(df['{metric_column}'], errors='coerce').sum()",
+            "sql_like": f"SELECT SUM({metric_column}) FROM workbook_table;",
         }
 
     def _working_dataframe(self, selected_tables: list[str], tables: dict[str, pd.DataFrame]) -> pd.DataFrame:
@@ -256,7 +288,15 @@ class DataAgent:
                     return column
         return numeric_columns[0]
 
-    def _ranking(self, df: pd.DataFrame, dimension_column: str | None, metric_column: str, target_entity: str | None) -> pd.DataFrame:
+    def _ranking(
+        self,
+        df: pd.DataFrame,
+        dimension_column: str | None,
+        metric_column: str,
+        target_entity: str | None = None,
+        direction: str = "desc",
+    ) -> pd.DataFrame:
+        ascending = direction == "asc"
         working = df.copy()
         working[metric_column] = pd.to_numeric(working[metric_column], errors="coerce")
         working = working.dropna(subset=[metric_column])
@@ -269,12 +309,12 @@ class DataAgent:
                     working.groupby(dimension_column, dropna=False)[metric_column]
                     .sum()
                     .reset_index()
-                    .sort_values(metric_column, ascending=False)
+                    .sort_values(metric_column, ascending=ascending)
                     .head(10)
                 )
                 return grouped
-            return working[[dimension_column, metric_column]].sort_values(metric_column, ascending=False).head(10)
-        return working[[metric_column]].sort_values(metric_column, ascending=False).head(10)
+            return working[[dimension_column, metric_column]].sort_values(metric_column, ascending=ascending).head(10)
+        return working[[metric_column]].sort_values(metric_column, ascending=ascending).head(10)
 
     def _simulation_base(
         self,
